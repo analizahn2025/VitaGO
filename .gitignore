@@ -16,3 +16,4 @@ staticfiles/
 logs/
 .idea/
 .vscode/
+VITAGO_*.md

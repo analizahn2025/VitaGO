@@ -12,7 +12,8 @@ from rest_framework.test import APIRequestFactory
 
 from apps.autenticacion.autenticadores import (
     AutenticacionCorporativaJWT,
-    AutenticacionExternaJWT,
+    AutenticacionLocalJWT,
+    AutenticacionVitaGo,
 )
 from apps.autenticacion.models import SesionAutenticacion
 from apps.autenticacion.servicios.tokens import crear_par_tokens
@@ -104,7 +105,7 @@ class PruebasAutenticacionCorporativa(SimpleTestCase):
             AutenticacionCorporativaJWT().authenticate(solicitud)
 
 
-class PruebasAutenticacionExterna(SimpleTestCase):
+class PruebasAutenticacionLocal(SimpleTestCase):
     def test_token_acceso_requiere_sesion_vigente(self):
         usuario = Usuario(
             correo="externo@example.com",
@@ -130,7 +131,7 @@ class PruebasAutenticacionExterna(SimpleTestCase):
             "SesionAutenticacion.objetos.select_related"
         ) as seleccionar:
             seleccionar.return_value.get.return_value = sesion
-            usuario_autenticado, _ = AutenticacionExternaJWT().authenticate(
+            usuario_autenticado, _ = AutenticacionLocalJWT().authenticate(
                 solicitud
             )
 
@@ -155,4 +156,18 @@ class PruebasAutenticacionExterna(SimpleTestCase):
             seleccionar.return_value.get.side_effect = (
                 SesionAutenticacion.DoesNotExist
             )
-            AutenticacionExternaJWT().authenticate(solicitud)
+            AutenticacionLocalJWT().authenticate(solicitud)
+
+    @override_settings(PROVEEDOR_AUTENTICACION="LOCAL")
+    @patch(
+        "apps.autenticacion.autenticadores.AutenticacionLocalJWT.authenticate"
+    )
+    def test_selector_utiliza_proveedor_local_en_corporativo(
+        self,
+        autenticar_local,
+    ):
+        solicitud = APIRequestFactory().get("/protegido/")
+
+        AutenticacionVitaGo().authenticate(solicitud)
+
+        autenticar_local.assert_called_once_with(solicitud)

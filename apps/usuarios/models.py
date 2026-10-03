@@ -111,7 +111,7 @@ class Usuario(ModeloUUIDConMarcasDeTiempo, AbstractBaseUser):
                 )
 
         if (
-            settings.MODO_APLICACION == "CORPORATIVO"
+            settings.PROVEEDOR_AUTENTICACION == "JWT_CORPORATIVO"
             and self.password
             and self.has_usable_password()
         ):

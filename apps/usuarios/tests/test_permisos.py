@@ -1,4 +1,4 @@
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from django.core.exceptions import ValidationError
 from django.test import SimpleTestCase
@@ -10,7 +10,10 @@ from apps.ubicaciones.models import TipoUbicacion, Ubicacion
 from apps.ubicaciones.opciones import OrigenUbicacion
 from apps.usuarios.models import Permiso, Rol, RolUsuario, Usuario
 from apps.usuarios.opciones import EstadoUsuario, TipoAlcanceRol
-from apps.usuarios.servicios import usuario_tiene_permiso
+from apps.usuarios.servicios import (
+    obtener_alcances_permiso,
+    usuario_tiene_permiso,
+)
 
 
 class PruebasRolesYPermisos(SimpleTestCase):
@@ -173,3 +176,63 @@ class PruebasRolesYPermisos(SimpleTestCase):
 
         self.assertFalse(resultado)
         existe.assert_not_called()
+
+    @patch("apps.usuarios.servicios.permisos.RolUsuario.objetos.filter")
+    def test_agrupa_alcances_de_un_permiso(self, filtrar_asignaciones):
+        consulta = MagicMock()
+        consulta.values_list.return_value.distinct.return_value = [
+            (TipoAlcanceRol.EMPRESA, self.empresa.id, None),
+            (
+                TipoAlcanceRol.SUCURSAL,
+                self.otra_empresa.id,
+                self.sucursal.id,
+            ),
+        ]
+        filtrar_asignaciones.return_value = consulta
+
+        alcances = obtener_alcances_permiso(
+            self.usuario,
+            " Sucursal.Ver ",
+        )
+
+        self.assertFalse(alcances.global_)
+        self.assertEqual(alcances.empresas, frozenset({self.empresa.id}))
+        self.assertEqual(alcances.sucursales, frozenset({self.sucursal.id}))
+        self.assertEqual(
+            alcances.empresas_de_sucursales,
+            frozenset({self.otra_empresa.id}),
+        )
+        self.assertTrue(alcances.permite_empresa(self.otra_empresa.id))
+        self.assertTrue(
+            alcances.permite_sucursal(
+                self.sucursal.id,
+                self.otra_empresa.id,
+            )
+        )
+
+    @patch("apps.usuarios.servicios.permisos.RolUsuario.objetos.filter")
+    def test_superusuario_posee_alcance_global_sin_consultar(
+        self,
+        filtrar_asignaciones,
+    ):
+        self.usuario.es_superusuario = True
+
+        alcances = obtener_alcances_permiso(self.usuario, "empresa.ver")
+
+        self.assertTrue(alcances.global_)
+        filtrar_asignaciones.assert_not_called()
+
+    @patch("apps.usuarios.servicios.permisos.RolUsuario.objetos.filter")
+    def test_superusuario_posee_permiso_sin_consultar(
+        self,
+        filtrar_asignaciones,
+    ):
+        self.usuario.es_superusuario = True
+
+        resultado = usuario_tiene_permiso(
+            self.usuario,
+            "usuario.administrar",
+        )
+
+        self.assertTrue(resultado)
+        filtrar_asignaciones.assert_not_called()

@@ -1,3 +1,4 @@
+from django.conf import settings
 from django.test import SimpleTestCase
 from django.urls import reverse
 
@@ -11,6 +12,6 @@ class PruebasSalud(SimpleTestCase):
             respuesta.json(),
             {
                 "estado": "correcto",
-                "servicio": "VitaGo",
+                "servicio": settings.NOMBRE_APLICACION,
             },
         )

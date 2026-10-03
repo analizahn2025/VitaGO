@@ -1,0 +1,17 @@
+{
+  "version": 1,
+  "skills": {
+    "google-maps": {
+      "source": "membranedev/application-skills",
+      "sourceType": "github",
+      "skillPath": "skills/google-maps/SKILL.md",
+      "computedHash": "6de0647e905e3121566145f6e1b25aaac0476687f8312cfcb55efae6cc299e0e"
+    },
+    "google-maps-platform": {
+      "source": "googlemaps/agent-skills",
+      "sourceType": "github",
+      "skillPath": "skills/google-maps-platform/SKILL.md",
+      "computedHash": "f4092ad152c96dc15dc7bb8e91f2c78522c3a13282efb5b02e3ce21ecc172c48"
+    }
+  }
+}

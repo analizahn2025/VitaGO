@@ -13,6 +13,13 @@ class ModoAplicacion(StrEnum):
     EXTERNO = "EXTERNO"
 
 
+class ProveedorAutenticacion(StrEnum):
+    """Proveedores de identidad admitidos por VitaGo."""
+
+    LOCAL = "LOCAL"
+    JWT_CORPORATIVO = "JWT_CORPORATIVO"
+
+
 def interpretar_modo_aplicacion(valor: str) -> ModoAplicacion:
     """Devuelve un modo de despliegue validado."""
     try:
@@ -24,6 +31,20 @@ def interpretar_modo_aplicacion(valor: str) -> ModoAplicacion:
         ) from exc
 
 
+def interpretar_proveedor_autenticacion(valor: str) -> ProveedorAutenticacion:
+    """Devuelve un proveedor de autenticación validado."""
+    try:
+        return ProveedorAutenticacion(valor.strip().upper())
+    except ValueError as exc:
+        valores_validos = ", ".join(
+            proveedor.value for proveedor in ProveedorAutenticacion
+        )
+        raise ImproperlyConfigured(
+            "PROVEEDOR_AUTENTICACION debe ser uno de estos valores: "
+            f"{valores_validos}."
+        ) from exc
+
+
 @dataclass(frozen=True, slots=True)
 class Funcionalidades:
     """Configuración central; nunca sustituye la autorización."""
@@ -31,4 +52,3 @@ class Funcionalidades:
     tarifas: bool
     repartidores_compartidos: bool
     mantenimiento_flota: bool
-

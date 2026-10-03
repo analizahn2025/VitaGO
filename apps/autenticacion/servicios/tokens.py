@@ -27,10 +27,10 @@ def _fecha_claim(valor):
 
 
 def _clave_hash_token_refresco():
-    clave = settings.CLAVE_HASH_TOKEN_REFRESCO
+    clave = settings.CLAVE_HASH_TOKEN_REFRESCO_LOCAL
     if len(clave.encode("utf-8")) < 32:
         raise ImproperlyConfigured(
-            "CLAVE_HASH_TOKEN_REFRESCO debe tener al menos 32 bytes."
+            "CLAVE_HASH_TOKEN_REFRESCO_LOCAL debe tener al menos 32 bytes."
         )
     return clave.encode("utf-8")
 

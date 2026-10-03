@@ -12,6 +12,7 @@ from apps.autenticacion.opciones import MotivoRevocacionSesion
 from apps.autenticacion.servicios.sesiones import (
     MetadatosSesion,
     renovar_sesion,
+    revocar_sesiones_usuario_inactivo,
 )
 from apps.usuarios.models import Usuario
 
@@ -116,4 +117,23 @@ class PruebasRotacionSesiones(SimpleTestCase):
         self.assertEqual(
             revocar_familia.call_args.args[1],
             MotivoRevocacionSesion.REUTILIZACION_TOKEN,
+        )
+
+    @patch(
+        "apps.autenticacion.servicios.sesiones._revocar_sesiones_activas"
+    )
+    def test_desactivacion_revoca_todas_las_sesiones_con_motivo(self, revocar):
+        usuario = Usuario(
+            id=uuid.uuid4(),
+            correo="inactivo@example.com",
+            nombres="Usuario",
+            apellidos="Inactivo",
+        )
+
+        revocar_sesiones_usuario_inactivo.__wrapped__(usuario)
+
+        self.assertEqual(revocar.call_args.args[0], {"usuario": usuario})
+        self.assertEqual(
+            revocar.call_args.args[1],
+            MotivoRevocacionSesion.USUARIO_INACTIVO,
         )

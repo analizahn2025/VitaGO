@@ -63,6 +63,7 @@ class Ubicacion(ModeloUUIDConMarcasDeTiempo):
         blank=True,
     )
     localidad = models.CharField(max_length=150, null=True, blank=True)
+    colonia = models.CharField(max_length=150, null=True, blank=True)
     direccion = models.TextField()
     latitud = models.DecimalField(
         max_digits=9,

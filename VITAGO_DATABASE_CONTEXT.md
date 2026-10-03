@@ -1,5 +1,13 @@
 # DATABASE_CONTEXT.md
 
+> Actualización vigente (2026-10-01): `vehiculos.capacidad_carga_kg` se
+> conserva nullable solo por compatibilidad/historia; no se edita en la API.
+> Los tipos de vehículo distintos de `MOTOCICLETA` se conservan para
+> trazabilidad, no para nuevas altas. `repartidores.capacidad` es una copia
+> derivada del conteo de solicitudes activas, no un dato de entrada. Se añade
+> `notificaciones_usuario`, vinculada a usuario, solicitud y evento, con fecha
+> de lectura y unicidad por usuario/evento.
+
 ## 0. Identidad del producto
 
 - Plataforma: **VitaGo**.
@@ -119,6 +127,16 @@ created_at TIMESTAMPTZ
 updated_at TIMESTAMPTZ
 ```
 
+Implementación vigente en español:
+
+- `vehiculos`: UUID, `empresa_id` opcional, `placa` única, `tipo`, `marca`,
+  `modelo`, `anio`, `capacidad_carga_kg`, `estado`, `notas` y marcas de tiempo;
+- restricciones para tipos, estados y capacidad de carga positiva;
+- índices por empresa/estado y estado;
+- Corporate utiliza `empresa_id`; Network conserva `empresa_id = NULL` para
+  representar el alcance global;
+- kilometraje y mantenimiento permanecen pendientes para su fase específica.
+
 ---
 
 ## 6. companies
@@ -185,6 +203,7 @@ country_id UUID FK
 admin_level_1 VARCHAR NULL
 admin_level_2 VARCHAR NULL
 locality VARCHAR NULL
+neighborhood VARCHAR NULL
 
 address TEXT
 latitude NUMERIC(9,6)
@@ -208,6 +227,16 @@ updated_at TIMESTAMPTZ
 - USER_REGISTERED
 
 Si se usa PostGIS, agregar un `geography(Point, 4326)`.
+
+Implementación vigente en español:
+
+- `nivel_administrativo_1` conserva internamente el departamento;
+- `nivel_administrativo_2` conserva internamente el municipio;
+- `localidad` conserva internamente la ciudad;
+- `colonia` conserva la colonia, barrio o sector específico;
+- la API traduce los tres primeros a `departamento`, `municipio` y `ciudad`;
+- los cuatro campos son opcionales para permitir direcciones incompletas de
+  distintas fuentes y países.
 
 ---
 
@@ -385,6 +414,20 @@ actualizado_en TIMESTAMPTZ
 
 Las asignaciones revocadas conservan su historial. Solo puede existir una asignación activa por usuario, rol y alcance equivalente.
 
+Catálogo corporativo vigente:
+
+- `GERENTE_OPERACIONES` concentra la coordinación operativa, los envíos
+  especiales y la administración de usuarios y roles operativos dentro de una
+  empresa;
+- sus permisos administrativos adicionales son `usuario.administrar` y
+  `rol.asignar`;
+- solo puede delegar `SOLICITANTE_CORPORATIVO` y
+  `REPARTIDOR_CORPORATIVO`;
+- la autorización de servicio impide que modifique administradores u otros
+  gerentes aunque compartan la misma empresa;
+- `SUPERVISOR_CORPORATIVO` se conserva inactivo para no eliminar referencias
+  históricas, pero sus relaciones activas de permisos fueron deshabilitadas.
+
 ---
 
 ## 17. sesiones_autenticacion
@@ -471,6 +514,17 @@ updated_at TIMESTAMPTZ
 - AVAILABLE_SPACE
 - FULL
 
+Implementación vigente en español:
+
+- `repartidores`: UUID, `usuario_id` único, `empresa_id` opcional,
+  `vehiculo_id` opcional, `estado_operativo`, `capacidad`, `activo` y marcas de
+  tiempo;
+- `historial_estado_repartidor`: motorista, estado anterior/nuevo, capacidad
+  anterior/nueva, responsable, motivo y marcas de tiempo;
+- el modo y alcance reemplazan la necesidad de persistir un `rider_type`
+  redundante: Corporate requiere empresa y Network utiliza alcance global;
+- existen índices para disponibilidad por empresa, estado y capacidad.
+
 ---
 
 ## 20. rider_shifts
@@ -493,6 +547,19 @@ status VARCHAR
 created_at TIMESTAMPTZ
 updated_at TIMESTAMPTZ
 ```
+
+Implementación vigente en español:
+
+- tabla `jornadas_repartidor` y modelo `JornadaRepartidor`;
+- estados `ACTIVA` y `FINALIZADA`;
+- campos de GPS de inicio y cierre con validación por pareja y rango;
+- resumen persistido de kilómetros operativos, servicios, recolecciones,
+  entregas, normales, prioritarios, minutos activos e incidencias;
+- una restricción parcial impide dos jornadas activas para un motorista;
+- una restricción exige fecha de cierre solamente para jornadas finalizadas;
+- los índices permiten consultar el historial por motorista y las jornadas por
+  estado y fecha;
+- no se permite borrado normal de jornadas.
 
 ---
 
@@ -590,6 +657,41 @@ notes TEXT NULL
 created_at TIMESTAMPTZ
 ```
 
+Implementación vigente en español:
+
+- `tipos_servicio`: UUID, `codigo`, `nombre`, `descripcion`, `activo`;
+- `solicitudes`: UUID, `numero`, `empresa_id`, `sucursal_id`,
+  `solicitada_por_id`, `prioridad`, `modalidad`, `tipo_servicio_id`,
+  `origen_id`, `destino_id` opcional, `destino_especial`, `estado`, notas y
+  fechas operativas;
+- `articulos_solicitud`: contenido, cantidad positiva, referencia, condición
+  de transporte y notas;
+- `eventos_solicitud`: historial inmutable por operación normal, con tipo,
+  responsable, metadatos y fecha;
+- existen restricciones para prioridades, estados y cantidades, además de
+  índices por empresa/fecha, estado/fecha, solicitante/fecha y relaciones de
+  artículos/eventos;
+- `solicitudes.repartidor_asignado_id` es una llave foránea opcional al perfil
+  operativo vigente;
+- existe un índice por `repartidor_asignado_id` y `estado` para consultas
+  operativas.
+- una restricción exige destino registrado en solicitudes normales y destino
+  descriptivo sin llave foránea en la modalidad `ESPECIAL`;
+- `movimientos_envios_especiales` conserva una relación uno a uno con la
+  solicitud, motorista, jornada, estado, coordenadas y fechas de apertura y
+  cierre, kilómetros congelados y contadores de puntos considerados y
+  descartados;
+- una restricción parcial permite un solo movimiento especial `ACTIVO` por
+  motorista y las restricciones de cierre exigen coordenadas finales para
+  `FINALIZADO`.
+- las opciones de creación y el resumen del solicitante son consultas sobre
+  `sucursales`, `ubicaciones_empresa`, `solicitudes` y permisos existentes; no
+  agregan tablas ni duplican catálogos persistidos.
+
+El esquema conceptual en inglés de esta sección se conserva como referencia
+original; los nombres persistidos por VitaGo siguen la convención oficial en
+español.
+
 ---
 
 ## 24. request_assignments
@@ -614,6 +716,19 @@ created_at TIMESTAMPTZ
 - MANUAL
 
 Nunca perder el historial al reasignar.
+
+Implementación vigente en español:
+
+- `asignaciones_solicitud`: UUID, `solicitud_id`, `repartidor_id`,
+  `asignada_por_id`, `tipo`, `estado`, fechas de asignación/aceptación/cierre,
+  motivo y marcas de tiempo;
+- tipos: `MANUAL`, `AUTOMATICA`;
+- estados: `ACTIVA`, `FINALIZADA`, `CANCELADA`, `REASIGNADA`;
+- una restricción parcial permite una sola asignación `ACTIVA` por solicitud;
+- una restricción exige `finalizada_en` para toda asignación que ya no esté
+  activa;
+- los índices cubren historial por solicitud y asignaciones por motorista;
+- al reasignar se cierra la fila anterior y se crea una nueva.
 
 ---
 
@@ -642,6 +757,19 @@ Tipos:
 
 No permitir hard delete normal.
 
+Implementación vigente en español:
+
+- tabla `evidencias_solicitud`;
+- modelo `EvidenciaSolicitud`;
+- campos `solicitud`, `repartidor`, `tipo`, `clave_almacenamiento`,
+  `url_archivo`, `tipo_contenido`, `tamano_bytes`, `latitud`, `longitud`,
+  `capturada_en`, `notas`, `creado_en` y `actualizado_en`;
+- tipos `FOTO_RECOLECCION`, `FOTO_ENTREGA` y `FOTO_INCIDENCIA`;
+- restricciones para tipo, latitud y longitud;
+- clave de almacenamiento única e índices por solicitud/tipo/fecha y por
+  motorista/fecha;
+- no existe operación HTTP de borrado.
+
 ---
 
 ## 26. request_events
@@ -661,6 +789,10 @@ created_at TIMESTAMPTZ
 ```
 
 Sirve como timeline/auditoría.
+
+Implementación vigente: `eventos_solicitud` incluye `repartidor`, `latitud` y
+`longitud` opcionales, exige que ambas coordenadas sean nulas o válidas en
+conjunto y registra los eventos de todo el ciclo operativo y de evidencias.
 
 ---
 
@@ -1081,3 +1213,64 @@ Antes de implementar una decisión que contradiga una regla de este documento, d
 - o documentar claramente por qué necesita cambiarse.
 
 No inventar flujos de negocio que no estén aquí definidos.
+
+---
+
+## 46. Persistencia vigente de registros GPS
+
+La tabla `registros_ubicacion` conserva:
+
+- `id` UUID;
+- `id_cliente` UUID generado por el dispositivo;
+- `repartidor_id`, `jornada_id` y `movimiento_envio_especial_id` opcional;
+- latitud y longitud;
+- precisión en metros;
+- velocidad en metros por segundo;
+- rumbo en grados;
+- fecha real del dispositivo en `registrada_en`;
+- clasificación booleana `es_operativo`;
+- marcas de creación y actualización.
+
+Restricciones e índices:
+
+- unicidad de `(repartidor_id, id_cliente)` para idempotencia;
+- rangos válidos de coordenadas, precisión, velocidad y rumbo;
+- índice por motorista y fecha descendente;
+- índice por jornada y fecha descendente;
+- índice por motorista, clasificación operativa y fecha descendente.
+- índice por movimiento especial y fecha para reconstruir el recorrido.
+
+La fila no referencia directamente una solicitud normal porque un motorista
+puede transportar varias a la vez. Solo durante el movimiento exclusivo de un
+envío especial se enlaza al movimiento correspondiente. Su kilometraje se
+congela al cerrar y los puntos tardíos no lo recalculan.
+
+---
+
+## 47. Persistencia vigente de incidencias operativas
+
+La tabla `incidencias` conserva:
+
+- `id` UUID, `jornada_id` y `repartidor_id` obligatorios;
+- `solicitud_id` opcional para relacionar el problema con un servicio;
+- estado `ABIERTA`, `EN_REVISION` o `CERRADA`;
+- descripción, coordenadas opcionales y fecha real `reportada_en`;
+- usuario y fecha de revisión, además de `cerrada_en` cuando corresponda;
+- marcas de creación y actualización.
+
+La tabla `eventos_incidencia` registra de forma auditable el alta, la revisión,
+el cierre y la incorporación de evidencias, incluyendo usuario responsable,
+estados anterior y nuevo, notas y metadatos.
+
+La tabla `evidencias_incidencia` conserva la clave privada de almacenamiento,
+tipo de contenido, tamaño, coordenadas, fecha de captura, notas y el motorista
+que adjuntó la imagen. No se publica una URL directa al archivo.
+
+Restricciones e índices:
+
+- las coordenadas deben existir en pareja y respetar sus rangos;
+- los datos de revisión deben ser coherentes con el estado;
+- una incidencia cerrada debe conservar `cerrada_en`;
+- se indexan las consultas por jornada, solicitud, motorista, estado y fecha;
+- las relaciones operativas usan borrado protegido y no existe borrado normal
+  mediante la API.

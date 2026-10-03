@@ -20,8 +20,8 @@ class PruebasModeloUsuario(SimpleTestCase):
         self.assertEqual(usuario.estado, EstadoUsuario.ACTIVO)
         self.assertTrue(usuario.is_active)
 
-    @override_settings(MODO_APLICACION="CORPORATIVO")
-    def test_usuario_corporativo_rechaza_contrasena_local_utilizable(self):
+    @override_settings(PROVEEDOR_AUTENTICACION="JWT_CORPORATIVO")
+    def test_proveedor_corporativo_rechaza_contrasena_local_utilizable(self):
         usuario = Usuario(
             correo="corporativo@example.com",
             nombres="Usuario",
@@ -32,8 +32,11 @@ class PruebasModeloUsuario(SimpleTestCase):
         with self.assertRaises(ValidationError):
             usuario.clean()
 
-    @override_settings(MODO_APLICACION="EXTERNO")
-    def test_usuario_externo_acepta_contrasena_local_con_hash(self):
+    @override_settings(
+        MODO_APLICACION="CORPORATIVO",
+        PROVEEDOR_AUTENTICACION="LOCAL",
+    )
+    def test_corporativo_local_acepta_contrasena_con_hash(self):
         usuario = Usuario(
             correo="externo@example.com",
             nombres="Usuario",

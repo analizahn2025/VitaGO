@@ -11,7 +11,10 @@ class AdministradorUsuarios(BaseUserManager):
         if not correo:
             raise ValueError("El correo es obligatorio.")
 
-        if settings.MODO_APLICACION == "CORPORATIVO" and contrasena:
+        if (
+            settings.PROVEEDOR_AUTENTICACION == "JWT_CORPORATIVO"
+            and contrasena
+        ):
             raise ValueError(
                 "Los usuarios corporativos no pueden tener contraseñas locales."
             )
@@ -35,7 +38,7 @@ class AdministradorUsuarios(BaseUserManager):
 
     def create_superuser(self, correo, password=None, **campos_adicionales):
         """Integración requerida por el comando createsuperuser de Django."""
-        if settings.MODO_APLICACION == "CORPORATIVO":
+        if settings.PROVEEDOR_AUTENTICACION == "JWT_CORPORATIVO":
             raise ValueError(
                 "Los despliegues corporativos no usan superusuarios locales."
             )

@@ -14,7 +14,7 @@ from apps.autenticacion.serializadores import (
     SerializadorInicioSesion,
     SerializadorRenovacionToken,
 )
-from apps.autenticacion.servicios.credenciales import autenticar_usuario_externo
+from apps.autenticacion.servicios.credenciales import autenticar_usuario_local
 from apps.autenticacion.servicios.sesiones import (
     MetadatosSesion,
     cerrar_sesion,
@@ -24,9 +24,12 @@ from apps.autenticacion.servicios.sesiones import (
 )
 
 
-def _exigir_modo_externo():
-    if settings.MODO_APLICACION != "EXTERNO":
-        raise NotFound("Este endpoint no está disponible en el modo actual.")
+def _exigir_proveedor_local():
+    if settings.PROVEEDOR_AUTENTICACION != "LOCAL":
+        raise NotFound(
+            "Este endpoint no está disponible con el proveedor "
+            "de autenticación actual."
+        )
 
 
 def _obtener_direccion_ip(solicitud):
@@ -84,12 +87,12 @@ class VistaAutenticacionPublica(APIView):
 
 class VistaInicioSesion(VistaAutenticacionPublica):
     def post(self, request):
-        _exigir_modo_externo()
+        _exigir_proveedor_local()
         serializador = SerializadorInicioSesion(data=request.data)
         serializador.is_valid(raise_exception=True)
 
         try:
-            usuario = autenticar_usuario_externo(
+            usuario = autenticar_usuario_local(
                 serializador.validated_data["correo"],
                 serializador.validated_data["contrasena"],
             )
@@ -108,7 +111,7 @@ class VistaInicioSesion(VistaAutenticacionPublica):
 
 class VistaRenovacionToken(VistaAutenticacionPublica):
     def post(self, request):
-        _exigir_modo_externo()
+        _exigir_proveedor_local()
         serializador = SerializadorRenovacionToken(data=request.data)
         serializador.is_valid(raise_exception=True)
 
@@ -127,7 +130,7 @@ class VistaCierreSesion(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request):
-        _exigir_modo_externo()
+        _exigir_proveedor_local()
         try:
             cerrar_sesion(request.user, request.auth["sesion_id"])
         except (ErrorAutenticacion, KeyError) as error:
@@ -141,6 +144,6 @@ class VistaCierreTotalSesiones(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request):
-        _exigir_modo_externo()
+        _exigir_proveedor_local()
         cerrar_todas_las_sesiones(request.user)
         return Response(status=HTTP_204_NO_CONTENT)

@@ -1,4 +1,4 @@
-"""Validación de credenciales locales para VitaGo Network."""
+"""Validación de credenciales del proveedor local de VitaGo."""
 
 from django.contrib.auth.hashers import make_password
 
@@ -6,11 +6,11 @@ from apps.autenticacion.excepciones import CredencialesInvalidas
 from apps.usuarios.models import Usuario
 
 
-def autenticar_usuario_externo(correo, contrasena):
+def autenticar_usuario_local(correo, contrasena):
     correo_normalizado = Usuario.objetos.normalize_email(correo).casefold()
 
     try:
-        usuario = Usuario.objetos.get(correo__iexact=correo_normalizado)
+        usuario = Usuario.objetos.get(correo=correo_normalizado)
     except Usuario.DoesNotExist as exc:
         # Conserva un costo criptográfico similar y reduce enumeración por tiempo.
         make_password(contrasena)

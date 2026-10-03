@@ -23,7 +23,7 @@ if SEGUNDOS_TOLERANCIA_RELOJ_JWT < 0:  # noqa: F405
         "SEGUNDOS_TOLERANCIA_RELOJ_JWT no puede ser negativo."
     )
 
-if MODO_APLICACION == "CORPORATIVO":  # noqa: F405
+if PROVEEDOR_AUTENTICACION == "JWT_CORPORATIVO":  # noqa: F405
     if ALGORITMO_JWT_CORPORATIVO not in {"RS256", "RS384", "RS512"}:  # noqa: F405
         raise ImproperlyConfigured(
             "ALGORITMO_JWT_CORPORATIVO debe ser RS256, RS384 o RS512."
@@ -40,33 +40,41 @@ if MODO_APLICACION == "CORPORATIVO":  # noqa: F405
         raise ImproperlyConfigured(
             "AUDIENCIA_JWT_CORPORATIVO es obligatoria en modo corporativo."
         )
-elif MODO_APLICACION == "EXTERNO":  # noqa: F405
-    if ALGORITMO_JWT_EXTERNO not in {"HS256", "HS384", "HS512"}:  # noqa: F405
+elif PROVEEDOR_AUTENTICACION == "LOCAL":  # noqa: F405
+    if MODO_APLICACION == "CORPORATIVO":  # noqa: F405
         raise ImproperlyConfigured(
-            "ALGORITMO_JWT_EXTERNO debe ser HS256, HS384 o HS512."
+            "La autenticación local de Corporate solo está permitida "
+            "con la configuración de desarrollo local."
+        )
+    if ALGORITMO_JWT_LOCAL not in {"HS256", "HS384", "HS512"}:  # noqa: F405
+        raise ImproperlyConfigured(
+            "ALGORITMO_JWT_LOCAL debe ser HS256, HS384 o HS512."
         )
     bytes_minimos_firma = {"HS256": 32, "HS384": 48, "HS512": 64}[
-        ALGORITMO_JWT_EXTERNO  # noqa: F405
+        ALGORITMO_JWT_LOCAL  # noqa: F405
     ]
     if (  # noqa: F405
-        len(CLAVE_FIRMA_JWT_EXTERNO.encode("utf-8"))
+        len(CLAVE_FIRMA_JWT_LOCAL.encode("utf-8"))
         < bytes_minimos_firma
     ):
         raise ImproperlyConfigured(
-            "CLAVE_FIRMA_JWT_EXTERNO no alcanza la longitud mínima "
+            "CLAVE_FIRMA_JWT_LOCAL no alcanza la longitud mínima "
             "del algoritmo configurado."
         )
-    if CLAVE_FIRMA_JWT_EXTERNO == SECRET_KEY:  # noqa: F405
+    if CLAVE_FIRMA_JWT_LOCAL == SECRET_KEY:  # noqa: F405
         raise ImproperlyConfigured(
-            "CLAVE_FIRMA_JWT_EXTERNO debe ser diferente de CLAVE_SECRETA."
+            "CLAVE_FIRMA_JWT_LOCAL debe ser diferente de CLAVE_SECRETA."
         )
-    if len(CLAVE_HASH_TOKEN_REFRESCO.encode("utf-8")) < 32:  # noqa: F405
+    if len(CLAVE_HASH_TOKEN_REFRESCO_LOCAL.encode("utf-8")) < 32:  # noqa: F405
         raise ImproperlyConfigured(
-            "CLAVE_HASH_TOKEN_REFRESCO debe tener al menos 32 bytes."
+            "CLAVE_HASH_TOKEN_REFRESCO_LOCAL debe tener al menos 32 bytes."
         )
-    if CLAVE_HASH_TOKEN_REFRESCO in {SECRET_KEY, CLAVE_FIRMA_JWT_EXTERNO}:  # noqa: F405
+    if CLAVE_HASH_TOKEN_REFRESCO_LOCAL in {  # noqa: F405
+        SECRET_KEY,
+        CLAVE_FIRMA_JWT_LOCAL,  # noqa: F405
+    }:
         raise ImproperlyConfigured(
-            "CLAVE_HASH_TOKEN_REFRESCO debe ser un secreto independiente."
+            "CLAVE_HASH_TOKEN_REFRESCO_LOCAL debe ser un secreto independiente."
         )
     if MINUTOS_TOKEN_ACCESO <= 0:  # noqa: F405
         raise ImproperlyConfigured(

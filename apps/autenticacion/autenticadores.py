@@ -1,4 +1,4 @@
-"""Estrategias JWT seleccionadas centralmente por modo de despliegue."""
+"""Estrategias JWT seleccionadas centralmente por proveedor de identidad."""
 
 import jwt
 from django.conf import settings
@@ -84,7 +84,7 @@ class AutenticacionCorporativaJWT(BaseAuthentication):
         return "Bearer"
 
 
-class AutenticacionExternaJWT(BaseAuthentication):
+class AutenticacionLocalJWT(BaseAuthentication):
     def authenticate(self, request):
         token_codificado = _extraer_token_portador(request)
         if token_codificado is None:
@@ -129,9 +129,9 @@ class AutenticacionVitaGo(BaseAuthentication):
     """Selecciona una estrategia sin dispersar condicionales por la API."""
 
     def authenticate(self, request):
-        if settings.MODO_APLICACION == "CORPORATIVO":
+        if settings.PROVEEDOR_AUTENTICACION == "JWT_CORPORATIVO":
             return AutenticacionCorporativaJWT().authenticate(request)
-        return AutenticacionExternaJWT().authenticate(request)
+        return AutenticacionLocalJWT().authenticate(request)
 
     def authenticate_header(self, request):
         return "Bearer"

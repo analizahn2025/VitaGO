@@ -181,3 +181,14 @@ def cerrar_todas_las_sesiones(usuario):
         MotivoRevocacionSesion.CIERRE_TOTAL,
         ahora,
     )
+
+
+@transaction.atomic
+def revocar_sesiones_usuario_inactivo(usuario):
+    """Revoca todas las sesiones por suspensión o desactivación administrativa."""
+    ahora = timezone.now()
+    return _revocar_sesiones_activas(
+        {"usuario": usuario},
+        MotivoRevocacionSesion.USUARIO_INACTIVO,
+        ahora,
+    )

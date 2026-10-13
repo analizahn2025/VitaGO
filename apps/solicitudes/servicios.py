@@ -562,6 +562,10 @@ def _asignar_automaticamente(solicitud, usuario):
             _validar_repartidor_disponible(repartidor, solicitud)
         except (ValidationError, LimiteSolicitudesRepartidor):
             continue
+        from apps.seguimiento.vigencia import posiciones_vigentes
+
+        if settings.ASIGNACION_REQUIERE_GPS_VIGENTE and not posiciones_vigentes().filter(repartidor=repartidor).exists():
+            continue
         return _registrar_asignacion(
             solicitud,
             repartidor,
@@ -844,6 +848,13 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
             ).get(id=solicitud.repartidor_asignado_id)
     else:
         repartidor = _obtener_repartidor_operativo(usuario, solicitud)
+        exclusiva = Solicitud.objects.filter(
+            repartidor_asignado=repartidor,
+            prioridad=PrioridadSolicitud.PRIORITARIA,
+            estado__in=(EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO),
+        ).exclude(pk=solicitud.pk).exists()
+        if exclusiva:
+            raise ValidationError({"estado_destino": "Debe finalizar el envío prioritario recogido antes de operar otra solicitud."})
 
     if estado_destino == EstadoSolicitud.RECOLECTADA:
         from apps.evidencias.models import EvidenciaSolicitud
@@ -920,6 +931,7 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
             latitud=datos_validados.get("latitud"),
             longitud=datos_validados.get("longitud"),
             ahora=ahora,
+            sesiones_gps=datos_validados.get("sesiones_gps"),
         )
 
     if estado_destino == EstadoSolicitud.HACIA_RECOLECCION:

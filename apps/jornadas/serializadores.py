@@ -2,6 +2,7 @@ from rest_framework import serializers
 
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.opciones import EstadoJornada
+from apps.seguimiento.serializadores import SerializadorConfirmacionGPS, SerializadorSesionCierreGPS
 
 
 class SerializadorJornada(serializers.ModelSerializer):
@@ -21,6 +22,7 @@ class SerializadorJornada(serializers.ModelSerializer):
             "longitud_fin",
             "kilometros_operativos",
             "kilometraje_disponible",
+            "calidad_kilometraje", "minutos_operativos",
             "servicios_completados",
             "recolecciones_completadas",
             "entregas_completadas",
@@ -82,3 +84,7 @@ class SerializadorConsultaJornadas(serializers.Serializer):
                 {"hasta": "Debe ser posterior o igual a desde."}
             )
         return atributos
+
+
+class SerializadorCierreJornada(SerializadorCoordenadasJornada, SerializadorConfirmacionGPS):
+    sesiones_gps = SerializadorSesionCierreGPS(many=True, required=False, allow_empty=True)

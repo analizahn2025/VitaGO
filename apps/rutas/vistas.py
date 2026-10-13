@@ -6,7 +6,8 @@ from rest_framework.views import APIView
 
 from apps.nucleo.paginacion import PaginacionEstandar
 from apps.rutas.selectores import obtener_mi_ruta
-from apps.rutas.serializadores import SerializadorMiRuta
+from apps.rutas.serializadores import SerializadorMiRuta, SerializadorCalcularRuta
+from apps.rutas.ruta_vial import calcular_mi_ruta
 from apps.rutas.selectores_historial import (
     listar_rutas_autorizadas,
     listar_versiones_autorizadas,
@@ -40,6 +41,15 @@ class VistaRutasHistoricas(APIView):
         return paginacion.get_paginated_response(
             SerializadorRutaHistorica(pagina, many=True).data
         )
+
+
+class VistaCalcularMiRuta(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request):
+        entrada = SerializadorCalcularRuta(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        return Response(calcular_mi_ruta(request.user, **entrada.validated_data))
 
 
 class VistaVersionesRuta(APIView):

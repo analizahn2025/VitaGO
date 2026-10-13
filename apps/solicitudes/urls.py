@@ -10,11 +10,13 @@ from apps.solicitudes.vistas import (
     VistaOpcionesCreacionSolicitud,
     VistaResumenSolicitante,
     VistaTransicionSolicitud,
+    VistaSincronizacionGPSMovimiento,
 )
 
 app_name = "solicitudes"
 
 urlpatterns = [
+    path("<uuid:solicitud_id>/sincronizacion-gps/", VistaSincronizacionGPSMovimiento.as_view(), name="sincronizacion-gps"),
     path(
         "",
         VistaListaCreacionSolicitudes.as_view(),

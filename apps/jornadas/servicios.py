@@ -183,6 +183,7 @@ def _calcular_resumen(jornada, finalizada_en):
 @transaction.atomic
 def finalizar_jornada(usuario, jornada_id, datos_validados):
     _validar_coordenadas(datos_validados)
+    repartidor = _obtener_repartidor_propio_bloqueado(usuario)
     try:
         jornada = (
             JornadaRepartidor.objects.select_for_update(of=("self",))
@@ -192,7 +193,6 @@ def finalizar_jornada(usuario, jornada_id, datos_validados):
     except (JornadaRepartidor.DoesNotExist, ValueError) as error:
         raise Http404("La jornada activa no existe o no pertenece al motorista.") from error
 
-    repartidor = _obtener_repartidor_propio_bloqueado(usuario)
     _exigir_permiso(usuario, "jornada.finalizar", repartidor)
     if jornada.estado != EstadoJornada.ACTIVA:
         raise ValidationError({"jornada": "La jornada ya está finalizada."})
@@ -223,6 +223,10 @@ def finalizar_jornada(usuario, jornada_id, datos_validados):
         )
     )
 
+    from apps.seguimiento.sincronizacion import consolidar_jornada
+
+    consolidar_jornada(jornada, datos_validados.get("sesiones_gps"))
+
     _registrar_estado_repartidor(
         repartidor,
         usuario,
@@ -234,3 +238,27 @@ def finalizar_jornada(usuario, jornada_id, datos_validados):
 
     sincronizar_ruta(repartidor, VersionRuta.Motivo.CIERRE_JORNADA, cerrar=True)
     return jornada
+
+
+@transaction.atomic
+def confirmar_sincronizacion_jornada(usuario, jornada_id, datos_validados):
+    repartidor = _obtener_repartidor_propio_bloqueado(usuario)
+    _exigir_permiso(usuario, "jornada.finalizar", repartidor)
+    try:
+        jornada = JornadaRepartidor.objects.select_for_update().get(
+            pk=jornada_id, repartidor=repartidor, estado=EstadoJornada.FINALIZADA,
+        )
+    except JornadaRepartidor.DoesNotExist as error:
+        raise Http404("La jornada finalizada no existe o no pertenece al motorista.") from error
+    if not jornada.calidad_kilometraje:
+        raise ValidationError({"jornada": "Los cierres históricos no se recalculan."})
+    if jornada.calidad_kilometraje.get("sincronizacion_verificada"):
+        from apps.seguimiento.sincronizacion import normalizar_sesiones
+
+        sesiones = normalizar_sesiones(datos_validados["sesiones_gps"])
+        if sesiones != jornada.calidad_kilometraje["sesiones_gps"]:
+            raise ValidationError({"sesiones_gps": "El manifiesto del cierre consolidado es inmutable."})
+        return jornada
+    from apps.seguimiento.sincronizacion import consolidar_jornada
+
+    return consolidar_jornada(jornada, datos_validados["sesiones_gps"], "CONFIRMACION_GPS")

@@ -122,8 +122,10 @@ def obtener_paradas_operativas(repartidor):
 
 
 def obtener_mi_ruta(usuario):
-    """Devuelve un orden provisional; no calcula una ruta vial ni ETA."""
+    """Lectura operativa: nunca modifica versiones ni consulta proveedores."""
     from apps.rutas.models import RutaRepartidor
+    from apps.rutas.navegacion import navegacion_parada
+    from apps.rutas.ruta_vial import presentar_ruta_vial
 
     repartidor = _obtener_repartidor_propio(usuario)
     jornada_id = (
@@ -143,13 +145,16 @@ def obtener_mi_ruta(usuario):
         ruta.versiones.order_by("-numero").values_list("numero", flat=True).first()
         if ruta else None
     )
+    ruta_vial = presentar_ruta_vial(ruta, paradas, version_actual)
     return {
         "repartidor_id": repartidor.id,
         "jornada_id": jornada_id,
         "ruta_id": ruta.id if ruta else None,
         "version_actual": version_actual,
         "orden_tipo": "ASIGNACION",
-        "ruta_calculada": False,
+        "ruta_calculada": ruta_vial["estado"] == "CALCULADA",
+        "ruta_vial": ruta_vial,
+        "navegacion": navegacion_parada(paradas[0] if paradas else None),
         "proxima_parada": paradas[0] if paradas else None,
         "paradas": paradas,
     }

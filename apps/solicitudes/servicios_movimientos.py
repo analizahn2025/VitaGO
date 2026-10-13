@@ -1,15 +1,13 @@
 """Inicio, asociación GPS y cierre de los envíos especiales."""
 
-from decimal import Decimal, ROUND_HALF_UP
-
-from django.conf import settings
+from django.db import transaction
 from django.db.models import Q
+from django.http import Http404
 from rest_framework.exceptions import ValidationError
 
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.opciones import EstadoJornada
 from apps.seguimiento.models import RegistroUbicacion
-from apps.seguimiento.distancias import distancia_kilometros
 from apps.solicitudes.models import AsignacionSolicitud, MovimientoEnvioEspecial
 from apps.solicitudes.opciones import (
     EstadoAsignacionSolicitud,
@@ -80,58 +78,6 @@ def iniciar_movimiento_especial(
     )
 
 
-def _calcular_recorrido(movimiento, registros, latitud_fin, longitud_fin, ahora):
-    precision_maxima = Decimal(str(settings.PRECISION_GPS_MAXIMA_METROS))
-    velocidad_maxima = float(settings.VELOCIDAD_GPS_MAXIMA_METROS_SEGUNDO)
-    ultimo = (
-        movimiento.latitud_inicio,
-        movimiento.longitud_inicio,
-        movimiento.iniciada_en,
-    )
-    distancia_total = 0.0
-    considerados = 0
-    descartados = 0
-
-    for registro in registros:
-        if (
-            registro.precision_metros is not None
-            and registro.precision_metros > precision_maxima
-        ):
-            descartados += 1
-            continue
-        if (
-            registro.velocidad_metros_segundo is not None
-            and float(registro.velocidad_metros_segundo) > velocidad_maxima
-        ):
-            descartados += 1
-            continue
-        segundos = (registro.registrada_en - ultimo[2]).total_seconds()
-        if segundos <= 0:
-            descartados += 1
-            continue
-        distancia = distancia_kilometros(
-            ultimo[0], ultimo[1], registro.latitud, registro.longitud
-        )
-        if distancia * 1000 / segundos > velocidad_maxima:
-            descartados += 1
-            continue
-        distancia_total += distancia
-        considerados += 1
-        ultimo = (registro.latitud, registro.longitud, registro.registrada_en)
-
-    segundos_finales = (ahora - ultimo[2]).total_seconds()
-    if segundos_finales > 0:
-        distancia_final = distancia_kilometros(
-            ultimo[0], ultimo[1], latitud_fin, longitud_fin
-        )
-        if distancia_final * 1000 / segundos_finales <= velocidad_maxima:
-            distancia_total += distancia_final
-    kilometros = Decimal(str(distancia_total)).quantize(
-        Decimal("0.001"), rounding=ROUND_HALF_UP
-    )
-    return kilometros, considerados, descartados
-
-
 def cerrar_movimiento_especial(
     solicitud,
     repartidor,
@@ -139,6 +85,7 @@ def cerrar_movimiento_especial(
     latitud,
     longitud,
     ahora,
+    sesiones_gps=None,
 ):
     if latitud is None or longitud is None:
         raise ValidationError(
@@ -169,25 +116,10 @@ def cerrar_movimiento_especial(
         Q(movimiento_envio_especial__isnull=True)
         | Q(movimiento_envio_especial=movimiento)
     ).update(movimiento_envio_especial=movimiento, es_operativo=True)
-    registros = list(
-        registros_intervalo.filter(movimiento_envio_especial=movimiento).order_by(
-            "registrada_en", "id"
-        )
-    )
-    kilometros, considerados, descartados = _calcular_recorrido(
-        movimiento,
-        registros,
-        latitud,
-        longitud,
-        ahora,
-    )
     movimiento.estado = EstadoMovimientoEnvioEspecial.FINALIZADO
     movimiento.finalizada_en = ahora
     movimiento.latitud_fin = latitud
     movimiento.longitud_fin = longitud
-    movimiento.kilometros_recorridos = kilometros
-    movimiento.registros_considerados = considerados
-    movimiento.registros_descartados = descartados
     movimiento.save(
         update_fields=(
             "estado",
@@ -200,7 +132,9 @@ def cerrar_movimiento_especial(
             "actualizado_en",
         )
     )
-    return movimiento
+    from apps.seguimiento.sincronizacion import consolidar_movimiento
+
+    return consolidar_movimiento(movimiento, sesiones_gps)
 
 
 def obtener_movimientos_para_registros(repartidor, registros):
@@ -228,3 +162,37 @@ def movimiento_correspondiente(registrada_en, jornada_id, movimientos):
         ):
             return movimiento
     return None
+
+
+@transaction.atomic
+def confirmar_sincronizacion_movimiento(usuario, solicitud_id, datos):
+    from apps.solicitudes.models import Solicitud
+    from apps.solicitudes.servicios import _obtener_repartidor_operativo
+    from apps.seguimiento.sincronizacion import consolidar_movimiento, normalizar_sesiones
+
+    try:
+        solicitud = Solicitud.objects.select_for_update().select_related("empresa", "sucursal").get(pk=solicitud_id)
+    except Solicitud.DoesNotExist as error:
+        raise Http404("La solicitud no existe.") from error
+    repartidor = _obtener_repartidor_operativo(usuario, solicitud)
+    try:
+        movimiento = MovimientoEnvioEspecial.objects.select_for_update().get(
+            solicitud=solicitud, repartidor=repartidor, estado=EstadoMovimientoEnvioEspecial.FINALIZADO,
+        )
+    except MovimientoEnvioEspecial.DoesNotExist as error:
+        raise Http404("La solicitud no tiene un movimiento especial finalizado.") from error
+    if not movimiento.calidad_kilometraje:
+        raise ValidationError({"solicitud": "Los movimientos históricos no se recalculan."})
+    if movimiento.calidad_kilometraje.get("sincronizacion_verificada"):
+        if normalizar_sesiones(datos["sesiones_gps"]) != movimiento.calidad_kilometraje["sesiones_gps"]:
+            raise ValidationError({"sesiones_gps": "El manifiesto del cierre consolidado es inmutable."})
+        return movimiento
+    jornada = JornadaRepartidor.objects.select_for_update().get(pk=movimiento.jornada_id)
+    if jornada.calidad_kilometraje.get("sincronizacion_verificada"):
+        raise ValidationError({"jornada": "La jornada ya fue consolidada."})
+    consolidar_movimiento(movimiento, datos["sesiones_gps"], "CONFIRMACION_GPS")
+    if jornada.finalizada_en and jornada.calidad_kilometraje:
+        from apps.seguimiento.sincronizacion import consolidar_jornada
+
+        consolidar_jornada(jornada, jornada.calidad_kilometraje.get("sesiones_gps"), "CONFIRMACION_GPS")
+    return movimiento

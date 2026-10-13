@@ -1,9 +1,12 @@
 from io import StringIO
 from unittest.mock import patch
+from decimal import Decimal
+from uuid import uuid4
 
 from django.core.management import call_command
 from django.core.management.base import CommandError
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.utils import timezone
 
 from apps.flota.models import Vehiculo
 from apps.flota.opciones import TipoVehiculo
@@ -12,6 +15,7 @@ from apps.jornadas.models import JornadaRepartidor
 from apps.organizaciones.models import Empresa, Sucursal
 from apps.repartidores.models import Repartidor
 from apps.repartidores.opciones import EstadoOperativoRepartidor
+from apps.seguimiento.models import RegistroUbicacion
 from apps.solicitudes.models import AsignacionSolicitud, Solicitud
 from apps.solicitudes.opciones import EstadoSolicitud, ModalidadSolicitud
 from apps.solicitudes.selectores import (
@@ -79,7 +83,12 @@ class PruebasDatosPruebaCorporativo(TestCase):
             vehiculo=vehiculo,
             estado_operativo=EstadoOperativoRepartidor.DISPONIBLE,
         )
-        JornadaRepartidor.objects.create(repartidor=cls.repartidor)
+        jornada = JornadaRepartidor.objects.create(repartidor=cls.repartidor)
+        RegistroUbicacion.objects.create(
+            id_cliente=uuid4(), jornada=jornada, repartidor=cls.repartidor,
+            latitud=Decimal("14.072300"), longitud=Decimal("-87.192100"),
+            precision_metros=Decimal("8"), registrada_en=timezone.now(),
+        )
 
     @patch(
         "apps.nucleo.management.commands.crear_datos_prueba_corporativo."

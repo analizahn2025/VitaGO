@@ -3,7 +3,7 @@ from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK, HTTP_201_CREATED
 from rest_framework.views import APIView
 
-from apps.seguimiento.selectores import obtener_seguimiento_solicitud
+from apps.seguimiento.selectores import obtener_configuracion_gps, obtener_seguimiento_solicitud
 from apps.seguimiento.serializadores import (
     SerializadorLoteRegistrosUbicacion,
     SerializadorRegistroUbicacion,
@@ -31,6 +31,13 @@ class VistaRegistroUbicaciones(APIView):
             },
             status=HTTP_201_CREATED,
         )
+
+
+class VistaConfiguracionGPS(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        return Response(obtener_configuracion_gps(request.user))
 
 
 class VistaSeguimientoSolicitud(APIView):

@@ -20,7 +20,7 @@ from apps.usuarios.servicios import usuario_tiene_permiso
 
 def _obtener_repartidor_propio(usuario):
     try:
-        return Repartidor.objects.select_related("empresa").get(
+        return Repartidor.objects.select_for_update(of=("self",)).select_related("empresa").get(
             usuario=usuario, activo=True, usuario__estado=EstadoUsuario.ACTIVO,
         )
     except Repartidor.DoesNotExist as error:
@@ -29,7 +29,7 @@ def _obtener_repartidor_propio(usuario):
 
 def _obtener_jornada_propia(repartidor, jornada_id):
     try:
-        return JornadaRepartidor.objects.get(id=jornada_id, repartidor=repartidor)
+        return JornadaRepartidor.objects.select_for_update().get(id=jornada_id, repartidor=repartidor)
     except (JornadaRepartidor.DoesNotExist, ValueError) as error:
         raise Http404("La jornada no existe o no pertenece al motorista.") from error
 
@@ -71,6 +71,7 @@ def _coincide_registro_existente(existente, jornada, datos):
     campos = (
         "latitud", "longitud", "precision_metros", "velocidad_metros_segundo",
         "rumbo_grados", "registrada_en",
+        "sesion_gps", "secuencia",
     )
     return existente.jornada_id == jornada.id and all(
         getattr(existente, campo) == datos.get(campo) for campo in campos
@@ -122,6 +123,28 @@ def registrar_ubicaciones(usuario, datos_validados):
     nuevos_datos = [
         datos for datos in registros if datos["id_cliente"] not in existentes
     ]
+    sesiones = {datos["sesion_gps"] for datos in nuevos_datos if datos.get("sesion_gps")}
+    if sesiones and RegistroUbicacion.objects.filter(
+        repartidor=repartidor, sesion_gps__in=sesiones,
+    ).exclude(jornada=jornada).exists():
+        raise ValidationError({"registros": "Una sesión GPS no puede reutilizarse en otra jornada."})
+    condicion = Q(pk__in=[])
+    for sesion in sesiones:
+        secuencias = [d["secuencia"] for d in nuevos_datos if d.get("sesion_gps") == sesion]
+        condicion |= Q(sesion_gps=sesion, secuencia__in=secuencias)
+    existentes_secuencia = set(RegistroUbicacion.objects.filter(
+        condicion, repartidor=repartidor,
+    ).values_list("sesion_gps", "secuencia")) if sesiones else set()
+    errores = {
+        indice: {"secuencia": "Ya existe esta secuencia GPS con otro id_cliente."}
+        for indice, datos in enumerate(registros)
+        if datos in nuevos_datos and (datos.get("sesion_gps"), datos.get("secuencia")) in existentes_secuencia
+    }
+    if errores:
+        raise ValidationError({"registros": errores})
+    # Tras verificar un cierre no se admiten puntos nuevos que contradigan el manifiesto.
+    if jornada.calidad_kilometraje.get("sincronizacion_verificada") and nuevos_datos:
+        raise ValidationError({"registros": "La medición de esta jornada ya fue consolidada; solo admite reintentos idénticos."})
     intervalos = (
         _intervalos_operativos(repartidor, nuevos_datos)
         if nuevos_datos
@@ -146,6 +169,14 @@ def registrar_ubicaciones(usuario, datos_validados):
         for datos in nuevos_datos
     ]
     RegistroUbicacion.objects.bulk_create(nuevos, ignore_conflicts=True)
+    if nuevos:
+        from apps.seguimiento.sincronizacion import revisar_mediciones_pendientes
+        from apps.seguimiento.vigencia import posiciones_vigentes
+        from apps.solicitudes.servicios import programar_reintento_pendientes
+
+        revisar_mediciones_pendientes(jornada)
+        if posiciones_vigentes().filter(repartidor=repartidor).exists():
+            programar_reintento_pendientes(repartidor.empresa_id)
 
     guardados = {
         registro.id_cliente: registro

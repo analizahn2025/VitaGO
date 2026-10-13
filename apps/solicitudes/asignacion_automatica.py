@@ -2,6 +2,7 @@
 
 from math import asin, cos, radians, sin, sqrt
 
+from django.conf import settings
 from django.db.models import OuterRef, Subquery
 
 from apps.repartidores.capacidad import (
@@ -9,7 +10,7 @@ from apps.repartidores.capacidad import (
     filtrar_repartidores_disponibles,
 )
 from apps.repartidores.models import Repartidor
-from apps.seguimiento.models import RegistroUbicacion
+from apps.seguimiento.vigencia import posiciones_vigentes
 
 
 RADIO_TERRESTRE_KM = 6371.0088
@@ -31,10 +32,8 @@ def distancia_linea_recta_km(latitud_a, longitud_a, latitud_b, longitud_b):
 
 
 def candidatos_ordenados(solicitud):
-    """Incluye al final motoristas elegibles que todavía no enviaron GPS."""
-    ultimo_gps = RegistroUbicacion.objects.filter(
-        repartidor_id=OuterRef("pk")
-    ).order_by("-registrada_en", "-id")
+    """Ordena solo por GPS reciente y preciso; fallback explícito configurable."""
+    ultimo_gps = posiciones_vigentes().filter(repartidor_id=OuterRef("pk"))
     consulta = filtrar_repartidores_disponibles(
         anotar_carga_repartidores(
             Repartidor.objects.filter(empresa=solicitud.empresa)
@@ -43,6 +42,8 @@ def candidatos_ordenados(solicitud):
         ultima_latitud=Subquery(ultimo_gps.values("latitud")[:1]),
         ultima_longitud=Subquery(ultimo_gps.values("longitud")[:1]),
     )
+    if settings.ASIGNACION_REQUIERE_GPS_VIGENTE:
+        consulta = consulta.filter(ultima_latitud__isnull=False)
     candidatos = []
     for identificador, latitud, longitud in consulta.values_list(
         "id", "ultima_latitud", "ultima_longitud"

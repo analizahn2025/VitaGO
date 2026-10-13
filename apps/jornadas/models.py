@@ -52,6 +52,8 @@ class JornadaRepartidor(ModeloUUIDConMarcasDeTiempo):
         validators=[MinValueValidator(Decimal("0"))],
     )
     kilometraje_disponible = models.BooleanField(default=False)
+    calidad_kilometraje = models.JSONField(default=dict, blank=True)
+    minutos_operativos = models.PositiveIntegerField(null=True, blank=True)
     servicios_completados = models.PositiveIntegerField(default=0)
     recolecciones_completadas = models.PositiveIntegerField(default=0)
     entregas_completadas = models.PositiveIntegerField(default=0)

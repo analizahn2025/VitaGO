@@ -16,6 +16,8 @@ def _firma_parada(parada):
         parada["tipo"],
         str(ubicacion.id) if ubicacion else None,
         parada["destino_especial"],
+        str(ubicacion.latitud) if ubicacion else None,
+        str(ubicacion.longitud) if ubicacion else None,
     )
 
 
@@ -25,6 +27,8 @@ def _firma_persistida(parada):
         parada.tipo,
         str(parada.ubicacion_id) if parada.ubicacion_id else None,
         parada.destino_especial,
+        str(parada.latitud_ubicacion) if parada.ubicacion_id else None,
+        str(parada.longitud_ubicacion) if parada.ubicacion_id else None,
     )
 
 

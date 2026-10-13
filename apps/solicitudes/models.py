@@ -247,6 +247,7 @@ class MovimientoEnvioEspecial(ModeloUUIDConMarcasDeTiempo):
     )
     registros_considerados = models.PositiveIntegerField(default=0)
     registros_descartados = models.PositiveIntegerField(default=0)
+    calidad_kilometraje = models.JSONField(default=dict, blank=True)
 
     class Meta:
         db_table = "movimientos_envios_especiales"

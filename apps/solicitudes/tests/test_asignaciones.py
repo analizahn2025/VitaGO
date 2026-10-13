@@ -136,6 +136,8 @@ class PruebasAsignacionesSolicitud(TestCase):
             origen=self.origen,
             destino=self.destino,
         )
+        for repartidor in self.repartidores:
+            self._registrar_gps(repartidor, "14.072300", "-87.192100")
 
     def _datos_creacion_automatica(self):
         for ubicacion in (self.origen, self.destino):
@@ -170,13 +172,14 @@ class PruebasAsignacionesSolicitud(TestCase):
         }
 
     def _registrar_gps(self, repartidor, latitud, longitud):
-        jornada = JornadaRepartidor.objects.create(repartidor=repartidor)
+        jornada, _ = JornadaRepartidor.objects.get_or_create(repartidor=repartidor, estado="ACTIVA")
         RegistroUbicacion.objects.create(
             id_cliente=uuid.uuid4(),
             repartidor=repartidor,
             jornada=jornada,
             latitud=Decimal(latitud),
             longitud=Decimal(longitud),
+            precision_metros=Decimal("8"),
             registrada_en=timezone.now(),
         )
 
@@ -206,6 +209,8 @@ class PruebasAsignacionesSolicitud(TestCase):
         self.assertEqual(ruta.versiones.get().paradas.count(), 2)
 
     def test_reasignacion_cierra_anterior_y_crea_otra(self):
+        RegistroUbicacion.objects.all().delete()
+        JornadaRepartidor.objects.all().delete()
         asignar_solicitud_manualmente(
             self.administrador,
             self.solicitud.id,
@@ -383,6 +388,8 @@ class PruebasAsignacionesSolicitud(TestCase):
         )
 
     def test_cancelar_libera_capacidad_automaticamente(self):
+        RegistroUbicacion.objects.all().delete()
+        JornadaRepartidor.objects.all().delete()
         repartidor = self.repartidores[0]
         asignar_solicitud_manualmente(
             self.administrador,
@@ -544,6 +551,7 @@ class PruebasAsignacionesSolicitud(TestCase):
     def test_motorista_sin_gps_queda_despues_de_uno_con_gps(self):
         datos = self._datos_creacion_automatica()
         sin_gps, con_gps = self.repartidores
+        RegistroUbicacion.objects.filter(repartidor=sin_gps).delete()
         self._registrar_gps(con_gps, "14.200000", "-87.300000")
         solicitud = crear_solicitud(self.administrador, datos)
         self.assertEqual(solicitud.repartidor_asignado_id, con_gps.id)
@@ -551,7 +559,9 @@ class PruebasAsignacionesSolicitud(TestCase):
             NotificacionUsuario.objects.filter(usuario=sin_gps.usuario).exists()
         )
 
-    def test_sin_gps_se_asigna_un_motorista_disponible(self):
+    @override_settings(ASIGNACION_REQUIERE_GPS_VIGENTE=False)
+    def test_fallback_sin_gps_solo_si_se_configura_expresamente(self):
+        RegistroUbicacion.objects.all().delete()
         datos = self._datos_creacion_automatica()
         solicitud = crear_solicitud(self.administrador, datos)
         self.assertEqual(solicitud.estado, EstadoSolicitud.ASIGNADA)
@@ -561,6 +571,23 @@ class PruebasAsignacionesSolicitud(TestCase):
         )
         asignacion = AsignacionSolicitud.objects.get(solicitud=solicitud)
         self.assertIn("sin GPS", asignacion.motivo)
+
+    def test_sin_gps_permanece_pendiente_por_defecto(self):
+        RegistroUbicacion.objects.all().delete()
+        solicitud = crear_solicitud(self.administrador, self._datos_creacion_automatica())
+        self.assertEqual(solicitud.estado, EstadoSolicitud.PENDIENTE)
+
+    def test_gps_viejo_impreciso_o_de_jornada_cerrada_no_asigna(self):
+        from apps.solicitudes.asignacion_automatica import candidatos_ordenados
+
+        RegistroUbicacion.objects.filter(repartidor=self.repartidores[0]).update(
+            registrada_en=timezone.now() - timedelta(minutes=10),
+        )
+        RegistroUbicacion.objects.filter(repartidor=self.repartidores[1]).update(precision_metros=Decimal("100"))
+        self.assertEqual(candidatos_ordenados(self.solicitud), [])
+        RegistroUbicacion.objects.all().update(registrada_en=timezone.now(), precision_metros=Decimal("8"))
+        JornadaRepartidor.objects.all().update(estado="FINALIZADA", finalizada_en=timezone.now())
+        self.assertEqual(candidatos_ordenados(self.solicitud), [])
 
     def test_sin_motoristas_elegibles_permanece_pendiente(self):
         datos = self._datos_creacion_automatica()

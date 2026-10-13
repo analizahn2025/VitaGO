@@ -20,6 +20,7 @@ from apps.solicitudes.opciones import (
     PrioridadSolicitud,
 )
 from apps.usuarios.models import Usuario
+from apps.seguimiento.serializadores import SerializadorConfirmacionGPS, SerializadorSesionCierreGPS
 
 
 class SerializadorTipoServicio(serializers.ModelSerializer):
@@ -123,6 +124,7 @@ class SerializadorMovimientoEnvioEspecial(serializers.ModelSerializer):
             "kilometros_recorridos",
             "registros_considerados",
             "registros_descartados",
+            "calidad_kilometraje",
         )
 
 
@@ -331,7 +333,8 @@ class SerializadorAsignacionManualSolicitud(serializers.Serializer):
     )
 
 
-class SerializadorTransicionSolicitud(serializers.Serializer):
+class SerializadorTransicionSolicitud(SerializadorConfirmacionGPS):
+    sesiones_gps = SerializadorSesionCierreGPS(many=True, required=False, allow_empty=True)
     estado_destino = serializers.ChoiceField(choices=EstadoSolicitud.choices)
     latitud = serializers.DecimalField(
         max_digits=9,

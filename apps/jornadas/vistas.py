@@ -9,11 +9,13 @@ from apps.jornadas.selectores import (
     obtener_jornada_autorizada,
 )
 from apps.jornadas.serializadores import (
+    SerializadorCierreJornada,
     SerializadorConsultaJornadas,
     SerializadorCoordenadasJornada,
     SerializadorJornada,
 )
-from apps.jornadas.servicios import finalizar_jornada, iniciar_jornada
+from apps.jornadas.servicios import confirmar_sincronizacion_jornada, finalizar_jornada, iniciar_jornada
+from apps.seguimiento.serializadores import SerializadorConfirmacionGPS, SerializadorRevisionKilometraje
 from apps.nucleo.paginacion import PaginacionEstandar
 
 
@@ -73,7 +75,7 @@ class VistaFinalizacionJornada(APIView):
     permission_classes = (IsAuthenticated,)
 
     def post(self, request, jornada_id):
-        entrada = SerializadorCoordenadasJornada(data=request.data)
+        entrada = SerializadorCierreJornada(data=request.data)
         entrada.is_valid(raise_exception=True)
         jornada = finalizar_jornada(
             request.user,
@@ -81,4 +83,27 @@ class VistaFinalizacionJornada(APIView):
             entrada.validated_data,
         )
         return Response(SerializadorJornada(jornada).data, status=HTTP_200_OK)
+
+
+class VistaSincronizacionGPSJornada(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, jornada_id):
+        entrada = SerializadorConfirmacionGPS(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        jornada = confirmar_sincronizacion_jornada(request.user, jornada_id, entrada.validated_data)
+        return Response(SerializadorJornada(jornada).data)
+
+
+class VistaRevisionesKilometraje(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request, jornada_id):
+        from apps.seguimiento.models import RevisionKilometraje
+
+        jornada = obtener_jornada_autorizada(request.user, jornada_id)
+        consulta = RevisionKilometraje.objects.filter(jornada=jornada).order_by("-creado_en", "id")
+        paginacion = PaginacionEstandar()
+        pagina = paginacion.paginate_queryset(consulta, request, view=self)
+        return paginacion.get_paginated_response(SerializadorRevisionKilometraje(pagina, many=True).data)
 

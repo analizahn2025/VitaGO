@@ -8,6 +8,8 @@ from apps.nucleo.models import ModeloUUIDConMarcasDeTiempo
 
 class RegistroUbicacion(ModeloUUIDConMarcasDeTiempo):
     id_cliente = models.UUIDField()
+    sesion_gps = models.UUIDField(null=True, blank=True)
+    secuencia = models.PositiveBigIntegerField(null=True, blank=True)
     repartidor = models.ForeignKey(
         "repartidores.Repartidor",
         on_delete=models.PROTECT,
@@ -77,6 +79,17 @@ class RegistroUbicacion(ModeloUUIDConMarcasDeTiempo):
         ]
         constraints = [
             models.UniqueConstraint(
+                fields=("repartidor", "sesion_gps", "secuencia"),
+                name="reg_ubi_sesion_secuencia_uniq",
+            ),
+            models.CheckConstraint(
+                condition=(
+                    models.Q(sesion_gps__isnull=True, secuencia__isnull=True)
+                    | models.Q(sesion_gps__isnull=False, secuencia__gte=1, secuencia__isnull=False)
+                ),
+                name="reg_ubi_secuencia_pareja_ck",
+            ),
+            models.UniqueConstraint(
                 fields=("repartidor", "id_cliente"),
                 name="reg_ubi_repart_cliente_uniq",
             ),
@@ -119,3 +132,31 @@ class RegistroUbicacion(ModeloUUIDConMarcasDeTiempo):
 
     def __str__(self):
         return f"{self.repartidor_id} - {self.registrada_en:%Y-%m-%d %H:%M:%S}"
+
+
+class RevisionKilometraje(ModeloUUIDConMarcasDeTiempo):
+    """Auditoría de cálculos nuevos y de consolidaciones por GPS tardío."""
+
+    jornada = models.ForeignKey("jornadas.JornadaRepartidor", on_delete=models.PROTECT)
+    movimiento_especial = models.ForeignKey(
+        "solicitudes.MovimientoEnvioEspecial", on_delete=models.PROTECT,
+        null=True, blank=True,
+    )
+    numero = models.PositiveIntegerField()
+    motivo = models.CharField(max_length=32)
+    kilometros = models.DecimalField(max_digits=12, decimal_places=3)
+    calidad = models.JSONField()
+
+    class Meta:
+        db_table = "revisiones_kilometraje"
+        ordering = ("creado_en", "id")
+        constraints = [
+            models.UniqueConstraint(
+                fields=("jornada", "numero"), condition=models.Q(movimiento_especial__isnull=True),
+                name="revision_km_jornada_num_uniq",
+            ),
+            models.UniqueConstraint(
+                fields=("movimiento_especial", "numero"), condition=models.Q(movimiento_especial__isnull=False),
+                name="revision_km_mov_num_uniq",
+            ),
+        ]

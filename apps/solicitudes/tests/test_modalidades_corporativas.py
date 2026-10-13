@@ -302,8 +302,8 @@ class PruebasModalidadesCorporativas(TestCase):
         )
         self.assertEqual(cerrado.registros_considerados, 1)
         self.assertEqual(cerrado.registros_descartados, 1)
-        self.assertGreater(cerrado.kilometros_recorridos, Decimal("0.200"))
-        self.assertLess(cerrado.kilometros_recorridos, Decimal("0.250"))
+        self.assertEqual(cerrado.kilometros_recorridos, Decimal("0.000"))
+        self.assertGreater(cerrado.calidad_kilometraje["huecos_detectados"], 0)
 
     def test_opciones_filtran_destinos_y_ocultan_especial_sin_permiso(self):
         opciones = obtener_opciones_creacion_solicitud(

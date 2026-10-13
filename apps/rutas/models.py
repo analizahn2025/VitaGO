@@ -119,3 +119,39 @@ class ParadaVersionRuta(ModeloUUIDConMarcasDeTiempo):
             models.UniqueConstraint(fields=("version", "orden"), name="parada_version_orden_uniq"),
             models.CheckConstraint(condition=Q(orden__gte=1), name="parada_version_orden_ck"),
         ]
+
+
+class CalculoRutaVial(ModeloUUIDConMarcasDeTiempo):
+    class Estado(models.TextChoices):
+        CALCULANDO = "CALCULANDO", "Calculando"
+        CALCULADA = "CALCULADA", "Calculada"
+        FALLIDA = "FALLIDA", "Fallida"
+
+    version = models.OneToOneField(VersionRuta, on_delete=models.PROTECT, related_name="calculo_vial")
+    estado = models.CharField(max_length=16, choices=Estado.choices)
+    intentos = models.PositiveIntegerField(default=1)
+    token_intento = models.UUIDField()
+    iniciada_en = models.DateTimeField()
+    calculada_en = models.DateTimeField(null=True, blank=True)
+    expira_en = models.DateTimeField(null=True, blank=True)
+    reintento_desde = models.DateTimeField(null=True, blank=True)
+    codigo_error = models.CharField(max_length=40, blank=True)
+    origen_gps = models.JSONField(default=dict)
+    paradas_calculadas = models.JSONField(default=list)
+    # Solo coordenadas codificadas: no se persisten distancia, duración ni respuesta cruda de Google.
+    polilinea_codificada = models.TextField(blank=True)
+
+    class Meta:
+        db_table = "calculos_ruta_vial"
+        indexes = [models.Index(fields=("expira_en",), name="calculo_vial_expira_idx")]
+        constraints = [models.CheckConstraint(condition=Q(intentos__gte=1), name="calculo_vial_intentos_ck")]
+
+
+class ConsumoRutasGoogle(ModeloUUIDConMarcasDeTiempo):
+    periodo = models.CharField(max_length=10, choices=(("DIARIO", "Diario"), ("MENSUAL", "Mensual")))
+    fecha = models.DateField()
+    intentos_reservados = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        db_table = "consumo_rutas_google"
+        constraints = [models.UniqueConstraint(fields=("periodo", "fecha"), name="consumo_google_periodo_uniq")]

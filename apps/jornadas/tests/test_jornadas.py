@@ -221,7 +221,15 @@ class PruebasJornadas(TestCase):
         )
 
         with self.captureOnCommitCallbacks(execute=True):
-            self._iniciar()
+            jornada = self._iniciar()
+            from apps.seguimiento.servicios import registrar_ubicaciones
+
+            registrar_ubicaciones(self.repartidor.usuario, {
+                "jornada_id": jornada.id,
+                "registros": [{"id_cliente": uuid4(), "latitud": self.origen.latitud,
+                               "longitud": self.origen.longitud, "precision_metros": Decimal("8"),
+                               "registrada_en": timezone.now()}],
+            })
 
         pendiente.refresh_from_db()
         self.assertEqual(pendiente.estado, EstadoSolicitud.ASIGNADA)
@@ -322,6 +330,7 @@ class PruebasJornadas(TestCase):
         self._registrar_punto(jornada, 5, "14.050000")
         self._registrar_punto(jornada, 12, "14.072300")
         self._registrar_punto(jornada, 22, "14.073300")
+        self._registrar_punto(jornada, 22 + 5 / 60, "14.074300")
         self._registrar_punto(jornada, 25, "14.090000", operativo=False)
         self._registrar_punto(jornada, 45, "14.100000")
 
@@ -353,6 +362,7 @@ class PruebasJornadas(TestCase):
         )
         self._registrar_punto(jornada, 10, "14.072300")
         self._registrar_punto(jornada, 15, "14.073300")
+        self._registrar_punto(jornada, 15 + 5 / 60, "14.074300")
         self._registrar_punto(jornada, 32, "14.080000")
         self._registrar_punto(jornada, 34, "14.100000", precision=Decimal("101"))
         self._registrar_punto(jornada, 36, "14.081000")

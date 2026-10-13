@@ -1,6 +1,9 @@
 """Endpoints HTTP del dominio de solicitudes."""
 
 from rest_framework.permissions import IsAuthenticated
+from apps.seguimiento.serializadores import SerializadorConfirmacionGPS
+from apps.solicitudes.serializadores import SerializadorMovimientoEnvioEspecial
+from apps.solicitudes.servicios_movimientos import confirmar_sincronizacion_movimiento
 from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK, HTTP_201_CREATED
 from rest_framework.views import APIView
@@ -33,6 +36,16 @@ from apps.solicitudes.servicios import (
     cambiar_estado_solicitud,
     crear_solicitud,
 )
+
+
+class VistaSincronizacionGPSMovimiento(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def post(self, request, solicitud_id):
+        entrada = SerializadorConfirmacionGPS(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        movimiento = confirmar_sincronizacion_movimiento(request.user, solicitud_id, entrada.validated_data)
+        return Response(SerializadorMovimientoEnvioEspecial(movimiento).data)
 
 
 class VistaListaTiposServicio(APIView):

@@ -38,3 +38,17 @@ class SerializadorMiRuta(serializers.Serializer):
     ruta_calculada = serializers.BooleanField()
     proxima_parada = SerializadorParadaRuta(allow_null=True)
     paradas = SerializadorParadaRuta(many=True)
+    navegacion = serializers.JSONField(allow_null=True)
+    ruta_vial = serializers.JSONField()
+
+
+class SerializadorCalcularRuta(serializers.Serializer):
+    version_actual = serializers.IntegerField(min_value=1)
+    reintentar = serializers.BooleanField(default=False)
+
+    def to_internal_value(self, data):
+        if isinstance(data, dict):
+            desconocidos = set(data) - {"version_actual", "reintentar"}
+            if desconocidos:
+                raise serializers.ValidationError({campo: "Campo no permitido." for campo in desconocidos})
+        return super().to_internal_value(data)

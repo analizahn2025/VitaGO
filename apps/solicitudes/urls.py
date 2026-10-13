@@ -2,6 +2,7 @@ from django.urls import include, path
 
 from apps.seguimiento.vistas import VistaSeguimientoSolicitud
 from apps.solicitudes.vistas import (
+    VistaAgrupacionesSolicitudes,
     VistaAsignacionSolicitud,
     VistaDetalleSolicitud,
     VistaListaCreacionSolicitudes,
@@ -33,6 +34,11 @@ urlpatterns = [
         "resumen-solicitante/",
         VistaResumenSolicitante.as_view(),
         name="resumen-solicitante",
+    ),
+    path(
+        "agrupaciones/",
+        VistaAgrupacionesSolicitudes.as_view(),
+        name="agrupaciones",
     ),
     path(
         "<uuid:solicitud_id>/asignaciones/",

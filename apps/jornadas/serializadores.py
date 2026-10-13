@@ -5,7 +5,6 @@ from apps.jornadas.opciones import EstadoJornada
 
 
 class SerializadorJornada(serializers.ModelSerializer):
-    kilometraje_disponible = serializers.SerializerMethodField()
     incidencias_disponibles = serializers.SerializerMethodField()
 
     class Meta:
@@ -33,9 +32,6 @@ class SerializadorJornada(serializers.ModelSerializer):
             "creado_en",
             "actualizado_en",
         )
-
-    def get_kilometraje_disponible(self, objeto):
-        return False
 
     def get_incidencias_disponibles(self, objeto):
         return True

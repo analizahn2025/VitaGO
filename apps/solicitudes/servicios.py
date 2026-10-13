@@ -534,6 +534,16 @@ def _registrar_asignacion(
         repartidor=repartidor,
         anterior=repartidor_anterior,
     )
+    from apps.rutas.models import VersionRuta
+    from apps.rutas.servicios import sincronizar_ruta
+
+    if repartidor_anterior is not None:
+        sincronizar_ruta(repartidor_anterior, VersionRuta.Motivo.REASIGNACION)
+    sincronizar_ruta(
+        repartidor,
+        VersionRuta.Motivo.REASIGNACION if es_reasignacion
+        else VersionRuta.Motivo.ASIGNACION,
+    )
     return solicitud
 
 
@@ -951,6 +961,16 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
         longitud=datos_validados.get("longitud"),
         metadatos=metadatos,
     )
+    if repartidor is not None:
+        from apps.rutas.models import VersionRuta
+        from apps.rutas.servicios import sincronizar_ruta
+
+        sincronizar_ruta(
+            repartidor,
+            VersionRuta.Motivo.CANCELACION
+            if estado_destino == EstadoSolicitud.CANCELADA
+            else VersionRuta.Motivo.CAMBIO_ESTADO,
+        )
     if estado_destino in ESTADOS_TERMINALES and repartidor is not None:
         programar_reintento_pendientes(solicitud.empresa_id)
     return solicitud

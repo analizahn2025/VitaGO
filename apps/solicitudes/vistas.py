@@ -8,6 +8,7 @@ from rest_framework.views import APIView
 from apps.nucleo.paginacion import PaginacionEstandar
 from apps.solicitudes.opciones import EstadoSolicitud
 from apps.solicitudes.selectores import (
+    agrupar_solicitudes_autorizadas,
     listar_solicitudes_autorizadas,
     listar_tipos_servicio_autorizados,
     obtener_opciones_creacion_solicitud,
@@ -16,6 +17,7 @@ from apps.solicitudes.selectores import (
 )
 from apps.solicitudes.serializadores import (
     SerializadorAsignacionManualSolicitud,
+    SerializadorConsultaAgrupacionesSolicitudes,
     SerializadorConsultaOpcionesCreacion,
     SerializadorConsultaResumenSolicitante,
     SerializadorConsultaSolicitudes,
@@ -124,6 +126,24 @@ class VistaListaCreacionSolicitudes(APIView):
             SerializadorSolicitudDetalle(solicitud).data,
             status=HTTP_201_CREATED,
         )
+
+
+class VistaAgrupacionesSolicitudes(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        entrada = SerializadorConsultaAgrupacionesSolicitudes(
+            data=request.query_params
+        )
+        entrada.is_valid(raise_exception=True)
+        grupos = agrupar_solicitudes_autorizadas(
+            request.user,
+            entrada.validated_data["por"],
+            entrada.validated_data,
+        )
+        paginacion = PaginacionEstandar()
+        pagina = paginacion.paginate_queryset(grupos, request, view=self)
+        return paginacion.get_paginated_response(pagina)
 
 
 class VistaDetalleSolicitud(APIView):

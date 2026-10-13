@@ -1,7 +1,6 @@
 """Inicio, asociación GPS y cierre de los envíos especiales."""
 
 from decimal import Decimal, ROUND_HALF_UP
-from math import asin, cos, radians, sin, sqrt
 
 from django.conf import settings
 from django.db.models import Q
@@ -10,28 +9,13 @@ from rest_framework.exceptions import ValidationError
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.opciones import EstadoJornada
 from apps.seguimiento.models import RegistroUbicacion
+from apps.seguimiento.distancias import distancia_kilometros
 from apps.solicitudes.models import AsignacionSolicitud, MovimientoEnvioEspecial
 from apps.solicitudes.opciones import (
     EstadoAsignacionSolicitud,
     EstadoMovimientoEnvioEspecial,
     ModalidadSolicitud,
 )
-
-
-def _distancia_kilometros(latitud_a, longitud_a, latitud_b, longitud_b):
-    """Calcula distancia geodésica entre dos coordenadas."""
-    radio_tierra_km = 6371.0088
-    latitud_a_rad = radians(float(latitud_a))
-    latitud_b_rad = radians(float(latitud_b))
-    delta_latitud = latitud_b_rad - latitud_a_rad
-    delta_longitud = radians(float(longitud_b) - float(longitud_a))
-    componente = (
-        sin(delta_latitud / 2) ** 2
-        + cos(latitud_a_rad)
-        * cos(latitud_b_rad)
-        * sin(delta_longitud / 2) ** 2
-    )
-    return 2 * radio_tierra_km * asin(sqrt(componente))
 
 
 def iniciar_movimiento_especial(
@@ -125,7 +109,7 @@ def _calcular_recorrido(movimiento, registros, latitud_fin, longitud_fin, ahora)
         if segundos <= 0:
             descartados += 1
             continue
-        distancia = _distancia_kilometros(
+        distancia = distancia_kilometros(
             ultimo[0], ultimo[1], registro.latitud, registro.longitud
         )
         if distancia * 1000 / segundos > velocidad_maxima:
@@ -137,7 +121,7 @@ def _calcular_recorrido(movimiento, registros, latitud_fin, longitud_fin, ahora)
 
     segundos_finales = (ahora - ultimo[2]).total_seconds()
     if segundos_finales > 0:
-        distancia_final = _distancia_kilometros(
+        distancia_final = distancia_kilometros(
             ultimo[0], ultimo[1], latitud_fin, longitud_fin
         )
         if distancia_final * 1000 / segundos_finales <= velocidad_maxima:

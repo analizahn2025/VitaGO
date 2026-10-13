@@ -7,6 +7,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
 from apps.jornadas.models import JornadaRepartidor
+from apps.jornadas.kilometraje import calcular_kilometraje_operativo
 from apps.jornadas.opciones import EstadoJornada
 from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
 from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas
@@ -130,6 +131,10 @@ def iniciar_jornada(usuario, datos_validados):
         estado_nuevo=EstadoOperativoRepartidor.DISPONIBLE,
         motivo="Inicio de jornada.",
     )
+    from apps.rutas.models import VersionRuta
+    from apps.rutas.servicios import sincronizar_ruta
+
+    sincronizar_ruta(repartidor, VersionRuta.Motivo.INICIO_JORNADA, jornada=jornada)
     from apps.solicitudes.servicios import programar_reintento_pendientes
 
     programar_reintento_pendientes(repartidor.empresa_id)
@@ -139,6 +144,9 @@ def iniciar_jornada(usuario, datos_validados):
 def _calcular_resumen(jornada, finalizada_en):
     from apps.incidencias.models import Incidencia
 
+    kilometros, kilometraje_disponible = calcular_kilometraje_operativo(
+        jornada, finalizada_en
+    )
     solicitudes_entregadas = Solicitud.objects.filter(
         repartidor_asignado=jornada.repartidor,
         entregada_en__gte=jornada.iniciada_en,
@@ -151,6 +159,8 @@ def _calcular_resumen(jornada, finalizada_en):
     ).count()
     entregas = solicitudes_entregadas.count()
     return {
+        "kilometros_operativos": kilometros,
+        "kilometraje_disponible": kilometraje_disponible,
         "servicios_completados": entregas,
         "recolecciones_completadas": recolecciones,
         "entregas_completadas": entregas,
@@ -219,4 +229,8 @@ def finalizar_jornada(usuario, jornada_id, datos_validados):
         estado_nuevo=EstadoOperativoRepartidor.DESCONECTADO,
         motivo="Finalización de jornada.",
     )
+    from apps.rutas.models import VersionRuta
+    from apps.rutas.servicios import sincronizar_ruta
+
+    sincronizar_ruta(repartidor, VersionRuta.Motivo.CIERRE_JORNADA, cerrar=True)
     return jornada

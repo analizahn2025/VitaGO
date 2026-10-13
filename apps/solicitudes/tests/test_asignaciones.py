@@ -15,6 +15,7 @@ from apps.repartidores.models import Repartidor
 from apps.repartidores.servicios import actualizar_operacion_repartidor
 from apps.repartidores.selectores import listar_repartidores_disponibles
 from apps.repartidores.opciones import EstadoOperativoRepartidor
+from apps.rutas.models import RutaRepartidor, VersionRuta
 from apps.notificaciones.models import NotificacionUsuario
 from apps.notificaciones.opciones import TipoNotificacion
 from apps.seguimiento.models import RegistroUbicacion
@@ -200,6 +201,9 @@ class PruebasAsignacionesSolicitud(TestCase):
                 tipo=TipoEventoSolicitud.ASIGNADA,
             ).exists()
         )
+        ruta = RutaRepartidor.objects.get(repartidor=self.repartidores[0])
+        self.assertEqual(ruta.versiones.count(), 1)
+        self.assertEqual(ruta.versiones.get().paradas.count(), 2)
 
     def test_reasignacion_cierra_anterior_y_crea_otra(self):
         asignar_solicitud_manualmente(
@@ -235,6 +239,12 @@ class PruebasAsignacionesSolicitud(TestCase):
                 tipo=TipoEventoSolicitud.REASIGNADA,
             ).exists()
         )
+        anterior = RutaRepartidor.objects.get(repartidor=self.repartidores[0])
+        actual = RutaRepartidor.objects.get(repartidor=self.repartidores[1])
+        self.assertEqual(anterior.estado, RutaRepartidor.Estado.FINALIZADA)
+        self.assertEqual(anterior.versiones.count(), 2)
+        self.assertEqual(anterior.versiones.get(numero=2).paradas.count(), 0)
+        self.assertEqual(actual.versiones.get().paradas.count(), 2)
 
     def test_rechaza_motorista_no_disponible(self):
         repartidor = self.repartidores[0]
@@ -390,6 +400,11 @@ class PruebasAsignacionesSolicitud(TestCase):
             listar_repartidores_disponibles(self.administrador).filter(
                 id=repartidor.id
             ).exists()
+        )
+        ruta = RutaRepartidor.objects.get(repartidor=repartidor)
+        self.assertEqual(ruta.estado, RutaRepartidor.Estado.FINALIZADA)
+        self.assertEqual(
+            ruta.versiones.get(numero=2).motivo, VersionRuta.Motivo.CANCELACION
         )
 
     def test_notificaciones_http_propiedad_conteo_y_enlace(self):

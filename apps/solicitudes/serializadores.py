@@ -4,6 +4,7 @@ from decimal import Decimal
 
 from rest_framework import serializers
 
+from apps.organizaciones.models import Sucursal
 from apps.solicitudes.models import (
     AsignacionSolicitud,
     ArticuloSolicitud,
@@ -18,6 +19,7 @@ from apps.solicitudes.opciones import (
     ModalidadSolicitud,
     PrioridadSolicitud,
 )
+from apps.usuarios.models import Usuario
 
 
 class SerializadorTipoServicio(serializers.ModelSerializer):
@@ -124,7 +126,23 @@ class SerializadorMovimientoEnvioEspecial(serializers.ModelSerializer):
         )
 
 
+class SerializadorSolicitanteSolicitud(serializers.ModelSerializer):
+    class Meta:
+        model = Usuario
+        fields = ("id", "nombres", "apellidos")
+
+
+class SerializadorSucursalSolicitud(serializers.ModelSerializer):
+    class Meta:
+        model = Sucursal
+        fields = ("id", "nombre")
+
+
 class SerializadorSolicitudResumen(serializers.ModelSerializer):
+    sucursal = SerializadorSucursalSolicitud(read_only=True)
+    solicitante = SerializadorSolicitanteSolicitud(
+        source="solicitada_por", read_only=True
+    )
     tipo_servicio = SerializadorTipoServicio(read_only=True)
     origen = SerializadorUbicacionSolicitud(read_only=True)
     destino = SerializadorUbicacionSolicitud(read_only=True, allow_null=True)
@@ -154,7 +172,9 @@ class SerializadorSolicitudResumen(serializers.ModelSerializer):
             "numero",
             "empresa_id",
             "sucursal_id",
+            "sucursal",
             "solicitada_por_id",
+            "solicitante",
             "repartidor_asignado_id",
             "prioridad",
             "modalidad",
@@ -259,6 +279,8 @@ class SerializadorCreacionSolicitud(serializers.Serializer):
 class SerializadorConsultaSolicitudes(serializers.Serializer):
     empresa_id = serializers.UUIDField(required=False)
     sucursal_id = serializers.UUIDField(required=False)
+    sin_sucursal = serializers.BooleanField(required=False)
+    solicitada_por_id = serializers.UUIDField(required=False)
     estado = serializers.ChoiceField(
         choices=EstadoSolicitud.choices,
         required=False,
@@ -271,6 +293,18 @@ class SerializadorConsultaSolicitudes(serializers.Serializer):
         choices=ModalidadSolicitud.choices,
         required=False,
     )
+
+    def validate(self, atributos):
+        if atributos.get("sucursal_id") and atributos.get("sin_sucursal"):
+            raise serializers.ValidationError(
+                {"sin_sucursal": "No puede combinarse con sucursal_id."}
+            )
+        return atributos
+
+
+class SerializadorConsultaAgrupacionesSolicitudes(serializers.Serializer):
+    por = serializers.ChoiceField(choices=("sucursal", "solicitante"))
+    empresa_id = serializers.UUIDField(required=False)
 
 
 class SerializadorConsultaOpcionesCreacion(serializers.Serializer):

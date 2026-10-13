@@ -100,6 +100,7 @@ INSTALLED_APPS = [
     "apps.flota.apps.ConfiguracionFlota",
     "apps.repartidores.apps.ConfiguracionRepartidores",
     "apps.solicitudes.apps.ConfiguracionSolicitudes",
+    "apps.rutas.apps.ConfiguracionRutas",
     "apps.notificaciones.apps.ConfiguracionNotificaciones",
     "apps.evidencias.apps.ConfiguracionEvidencias",
     "apps.jornadas.apps.ConfiguracionJornadas",

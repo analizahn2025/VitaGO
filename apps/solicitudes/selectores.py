@@ -1,8 +1,7 @@
 """Consultas autorizadas y optimizadas del dominio de solicitudes."""
 
 from django.conf import settings
-from django.db.models import Count
-from django.db.models import Q
+from django.db.models import Count, F, Q
 from django.http import Http404
 from rest_framework.exceptions import PermissionDenied
 
@@ -289,24 +288,22 @@ def listar_solicitudes_autorizadas(usuario, filtros=None):
             'No tiene el permiso requerido para consultar solicitudes.'
         )
 
-    filtro_visibilidad = (
-        Q() if alcances_generales.global_ else Q(pk__isnull=True)
-    )
-    if (
-        alcances_generales.tiene_algun_alcance
-        and not alcances_generales.global_
-    ):
-        filtro_visibilidad |= _filtro_por_alcances(alcances_generales)
-    if alcances_propios.tiene_algun_alcance:
-        filtro_visibilidad |= Q(
-            _filtro_por_alcances(alcances_propios),
-            solicitada_por_id=usuario.pk,
-        )
-    if alcances_asignados.tiene_algun_alcance:
-        filtro_visibilidad |= Q(
-            _filtro_por_alcances(alcances_asignados),
-            repartidor_asignado__usuario_id=usuario.pk,
-        )
+    if alcances_generales.global_:
+        filtro_visibilidad = Q()
+    else:
+        filtro_visibilidad = Q(pk__isnull=True)
+        if alcances_generales.tiene_algun_alcance:
+            filtro_visibilidad |= _filtro_por_alcances(alcances_generales)
+        if alcances_propios.tiene_algun_alcance:
+            filtro_visibilidad |= Q(
+                _filtro_por_alcances(alcances_propios),
+                solicitada_por_id=usuario.pk,
+            )
+        if alcances_asignados.tiene_algun_alcance:
+            filtro_visibilidad |= Q(
+                _filtro_por_alcances(alcances_asignados),
+                repartidor_asignado__usuario_id=usuario.pk,
+            )
 
     consulta = _consulta_base_solicitudes().filter(filtro_visibilidad).distinct()
     filtros = filtros or {}
@@ -314,6 +311,12 @@ def listar_solicitudes_autorizadas(usuario, filtros=None):
         consulta = consulta.filter(empresa_id=filtros["empresa_id"])
     if filtros.get("sucursal_id"):
         consulta = consulta.filter(sucursal_id=filtros["sucursal_id"])
+    if filtros.get("sin_sucursal"):
+        consulta = consulta.filter(sucursal__isnull=True)
+    if filtros.get("solicitada_por_id"):
+        consulta = consulta.filter(
+            solicitada_por_id=filtros["solicitada_por_id"]
+        )
     if filtros.get("estado"):
         consulta = consulta.filter(estado=filtros["estado"])
     if filtros.get("prioridad"):
@@ -321,6 +324,49 @@ def listar_solicitudes_autorizadas(usuario, filtros=None):
     if filtros.get("modalidad"):
         consulta = consulta.filter(modalidad=filtros["modalidad"])
     return consulta.order_by("-creado_en", "-id")
+
+
+def agrupar_solicitudes_autorizadas(usuario, por, filtros=None):
+    """Agrupa solamente solicitudes de alcance administrativo autorizado."""
+    alcances = obtener_alcances_permiso(usuario, "solicitud.ver")
+    if not alcances.tiene_algun_alcance:
+        raise PermissionDenied(
+            'No tiene el permiso requerido: "solicitud.ver".'
+        )
+
+    consulta = listar_solicitudes_autorizadas(usuario, filtros)
+    if not alcances.global_:
+        consulta = consulta.filter(_filtro_por_alcances(alcances))
+    consulta = consulta.order_by()
+    if por == "sucursal":
+        return (
+            consulta.values(
+                "empresa_id",
+                "sucursal_id",
+                empresa_nombre=F("empresa__nombre"),
+                sucursal_nombre=F("sucursal__nombre"),
+            )
+            .annotate(total=Count("id", distinct=True))
+            .order_by("empresa_nombre", "sucursal_nombre", "sucursal_id")
+        )
+    if por == "solicitante":
+        return (
+            consulta.values(
+                "empresa_id",
+                "solicitada_por_id",
+                empresa_nombre=F("empresa__nombre"),
+                solicitante_nombres=F("solicitada_por__nombres"),
+                solicitante_apellidos=F("solicitada_por__apellidos"),
+            )
+            .annotate(total=Count("id", distinct=True))
+            .order_by(
+                "empresa_nombre",
+                "solicitante_nombres",
+                "solicitante_apellidos",
+                "solicitada_por_id",
+            )
+        )
+    raise ValueError("La agrupación solicitada no es válida.")
 
 
 def resumir_solicitudes_autorizadas(usuario, filtros=None):

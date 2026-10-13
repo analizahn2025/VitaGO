@@ -51,6 +51,7 @@ class JornadaRepartidor(ModeloUUIDConMarcasDeTiempo):
         default=Decimal("0"),
         validators=[MinValueValidator(Decimal("0"))],
     )
+    kilometraje_disponible = models.BooleanField(default=False)
     servicios_completados = models.PositiveIntegerField(default=0)
     recolecciones_completadas = models.PositiveIntegerField(default=0)
     entregas_completadas = models.PositiveIntegerField(default=0)
@@ -131,4 +132,3 @@ class JornadaRepartidor(ModeloUUIDConMarcasDeTiempo):
 
     def __str__(self):
         return f"{self.repartidor} - {self.iniciada_en:%Y-%m-%d %H:%M}"
-

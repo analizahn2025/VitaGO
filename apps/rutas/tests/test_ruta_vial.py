@@ -1,4 +1,4 @@
-"""Pruebas sin red ni credenciales reales para navegación y presupuesto."""
+"""Pruebas sin red ni credenciales reales para mapa integrado y presupuesto."""
 
 import json
 from datetime import timedelta
@@ -6,7 +6,6 @@ from decimal import Decimal
 from io import BytesIO, StringIO
 from unittest.mock import patch
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
 from django.core.management import call_command
@@ -55,17 +54,18 @@ class PruebasRutaVial(TestCase):
         return self.cliente.post(self.url, {"version_actual": 1, **datos}, format="json")
 
     @patch("apps.rutas.ruta_vial.calcular_ruta_google", return_value=RESULTADO)
-    def test_lectura_sin_red_y_navegacion_sin_clave(self, proveedor):
+    def test_lectura_sin_red_publica_mapa_integrado_sin_enlaces_externos(self, proveedor):
         with override_settings(HABILITAR_RUTAS_GOOGLE=False, CLAVE_API_GOOGLE_MAPS=""):
             respuesta = self.cliente.get(reverse("rutas:mi-ruta"))
         self.assertEqual(respuesta.status_code, 200)
         self.assertEqual(respuesta.data["ruta_vial"]["estado"], "NO_CONFIGURADA")
-        enlace = respuesta.data["navegacion"]
-        parametros = parse_qs(urlparse(enlace["url"]).query)
-        self.assertEqual(parametros["travelmode"], ["two-wheeler"])
-        self.assertEqual(parametros["destination"], ["14.072300,-87.192100"])
-        self.assertNotIn("origin", parametros)
-        self.assertFalse(enlace["requiere_clave_api"])
+        self.assertNotIn("navegacion", respuesta.data)
+        self.assertNotIn("https://www.google.com/maps/dir/", respuesta.content.decode())
+        self.assertEqual(respuesta.data["mapa"], {
+            "modo": "INTEGRADO", "proveedor": "GOOGLE_MAPS",
+            "mostrar_mapa": True, "mostrar_trazado": False,
+            "permite_navegacion_externa": False,
+        })
         proveedor.assert_not_called()
         self.assertFalse(CalculoRutaVial.objects.exists())
         self.assertEqual(self.ruta.versiones.count(), 1)
@@ -82,6 +82,9 @@ class PruebasRutaVial(TestCase):
         self.assertFalse(segunda.data["metricas_en_respuesta"])
         self.assertIsNone(segunda.data["distancia_estimada_metros"])
         self.assertEqual(segunda.data["polilinea_codificada"], RESULTADO["polilinea_codificada"])
+        lectura = self.cliente.get(reverse("rutas:mi-ruta"))
+        self.assertTrue(lectura.data["mapa"]["mostrar_trazado"])
+        self.assertFalse(lectura.data["mapa"]["permite_navegacion_externa"])
         proveedor.assert_called_once()
         self.assertEqual(list(ConsumoRutasGoogle.objects.values_list("intentos_reservados", flat=True)), [1, 1])
         calculo = CalculoRutaVial.objects.get()
@@ -190,6 +193,8 @@ class PruebasRutaVial(TestCase):
         lectura = self.cliente.get(reverse("rutas:mi-ruta"))
         self.assertEqual(lectura.data["ruta_vial"]["estado"], "VENCIDA")
         self.assertIsNone(lectura.data["ruta_vial"]["polilinea_codificada"])
+        self.assertTrue(lectura.data["mapa"]["mostrar_mapa"])
+        self.assertFalse(lectura.data["mapa"]["mostrar_trazado"])
         # GET no escribe, la tarea de limpieza sí elimina contenido vencido.
         self.assertTrue(CalculoRutaVial.objects.get().polilinea_codificada)
         call_command("limpiar_rutas_google_vencidas", stdout=StringIO())
@@ -226,7 +231,9 @@ class PruebasRutaVial(TestCase):
         self._crear_solicitud("SOL-ESPECIAL", modalidad=ModalidadSolicitud.ESPECIAL)
         sincronizar_ruta(self.motorista, VersionRuta.Motivo.CAMBIO_ESTADO)
         lectura = self.cliente.get(reverse("rutas:mi-ruta"))
-        self.assertIsNone(lectura.data["navegacion"])
+        self.assertNotIn("navegacion", lectura.data)
+        self.assertFalse(lectura.data["mapa"]["mostrar_mapa"])
+        self.assertFalse(lectura.data["mapa"]["mostrar_trazado"])
         self.assertEqual(lectura.data["ruta_vial"]["estado"], "SOLO_KILOMETROS")
         self.assertEqual(self.calcular(version_actual=2).data["codigo"], "SIN_PARADAS_CARTOGRAFIABLES")
         proveedor.assert_not_called()
@@ -266,7 +273,23 @@ class PruebasRutaVial(TestCase):
     @patch("apps.rutas.ruta_vial.calcular_ruta_google", return_value=RESULTADO)
     def test_ruta_funciona_tambien_en_network(self, proveedor):
         self.assertEqual(self.calcular().status_code, 200)
+        lectura = self.cliente.get(reverse("rutas:mi-ruta"))
+        self.assertEqual(lectura.data["mapa"]["modo"], "INTEGRADO")
+        self.assertTrue(lectura.data["mapa"]["mostrar_trazado"])
+        self.assertNotIn("navegacion", lectura.data)
         proveedor.assert_called_once()
+
+    @patch("apps.rutas.ruta_vial.calcular_ruta_google", return_value=RESULTADO)
+    def test_sin_paradas_no_hay_mapa_ni_trazado_ni_consulta_google(self, proveedor):
+        Solicitud.objects.filter(pk=self.solicitud.pk).update(estado=EstadoSolicitud.ENTREGADA)
+        respuesta = self.cliente.get(reverse("rutas:mi-ruta"))
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertFalse(respuesta.data["mapa"]["mostrar_mapa"])
+        self.assertFalse(respuesta.data["mapa"]["mostrar_trazado"])
+        self.assertEqual(respuesta.data["ruta_vial"]["estado"], "SIN_PARADAS")
+        self.assertIsNone(respuesta.data["proxima_parada"])
+        self.assertNotIn("navegacion", respuesta.data)
+        proveedor.assert_not_called()
 
 
 @override_settings(HABILITAR_RUTAS_GOOGLE=True, CLAVE_API_GOOGLE_MAPS="clave-ficticia")

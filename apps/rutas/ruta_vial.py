@@ -168,7 +168,7 @@ def calcular_mi_ruta(usuario, version_actual, reintentar=False):
         if previo:
             # Un proceso interrumpido requiere igualmente reintento explícito.
             if previo.estado == "CALCULADA":
-                raise ErrorRutaVial("RUTA_VENCIDA", "El trazado inicial venció; usa la navegación a la próxima parada. No se recalcula la misma versión.")
+                raise ErrorRutaVial("RUTA_VENCIDA", "El trazado inicial venció; consulta las paradas en el mapa integrado. No se recalcula la misma versión.")
             if not reintentar:
                 raise ErrorRutaVial("REINTENTO_EXPLICITO_REQUERIDO", "El intento anterior no terminó correctamente; no se reintenta automáticamente.")
             if previo.intentos >= settings.RUTAS_GOOGLE_INTENTOS_POR_VERSION:

@@ -29,6 +29,14 @@ class SerializadorParadaRuta(serializers.Serializer):
     )
 
 
+class SerializadorMapaIntegrado(serializers.Serializer):
+    modo = serializers.ChoiceField(choices=("INTEGRADO",))
+    proveedor = serializers.ChoiceField(choices=("GOOGLE_MAPS",))
+    mostrar_mapa = serializers.BooleanField()
+    mostrar_trazado = serializers.BooleanField()
+    permite_navegacion_externa = serializers.BooleanField()
+
+
 class SerializadorMiRuta(serializers.Serializer):
     repartidor_id = serializers.UUIDField()
     jornada_id = serializers.UUIDField(allow_null=True)
@@ -38,7 +46,7 @@ class SerializadorMiRuta(serializers.Serializer):
     ruta_calculada = serializers.BooleanField()
     proxima_parada = SerializadorParadaRuta(allow_null=True)
     paradas = SerializadorParadaRuta(many=True)
-    navegacion = serializers.JSONField(allow_null=True)
+    mapa = SerializadorMapaIntegrado()
     ruta_vial = serializers.JSONField()
 
 

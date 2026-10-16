@@ -1,6 +1,7 @@
 """Casos de uso transaccionales para jornadas de motoristas."""
 
 from django.db import transaction
+from django.db.models import Exists, OuterRef, Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
@@ -147,16 +148,19 @@ def _calcular_resumen(jornada, finalizada_en):
     kilometros, kilometraje_disponible = calcular_kilometraje_operativo(
         jornada, finalizada_en
     )
-    solicitudes_entregadas = Solicitud.objects.filter(
-        repartidor_asignado=jornada.repartidor,
-        entregada_en__gte=jornada.iniciada_en,
-        entregada_en__lte=finalizada_en,
-    )
-    recolecciones = Solicitud.objects.filter(
-        repartidor_asignado=jornada.repartidor,
-        recolectada_en__gte=jornada.iniciada_en,
-        recolectada_en__lte=finalizada_en,
-    ).count()
+    def solicitudes_en_fecha(campo):
+        historial = AsignacionSolicitud.objects.filter(solicitud_id=OuterRef("pk"))
+        del_motorista = historial.filter(
+            repartidor=jornada.repartidor, asignada_en__lte=OuterRef(campo),
+        ).filter(Q(finalizada_en__isnull=True) | Q(finalizada_en__gt=OuterRef(campo)))
+        return Solicitud.objects.filter(**{
+            f"{campo}__gte": jornada.iniciada_en, f"{campo}__lte": finalizada_en,
+        }).alias(tiene_historial=Exists(historial), fue_responsable=Exists(del_motorista)).filter(
+            Q(fue_responsable=True) | Q(tiene_historial=False, repartidor_asignado=jornada.repartidor),
+        )
+
+    solicitudes_entregadas = solicitudes_en_fecha("entregada_en")
+    recolecciones = solicitudes_en_fecha("recolectada_en").count()
     entregas = solicitudes_entregadas.count()
     return {
         "kilometros_operativos": kilometros,

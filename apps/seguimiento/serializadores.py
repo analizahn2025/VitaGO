@@ -68,6 +68,10 @@ class SerializadorConfirmacionGPS(serializers.Serializer):
         return sesiones
 
 
+class SerializadorConfirmacionMovimientoGPS(SerializadorConfirmacionGPS):
+    movimiento_id = serializers.UUIDField(required=False)
+
+
 class SerializadorLoteRegistrosUbicacion(serializers.Serializer):
     jornada_id = serializers.UUIDField()
     registros = SerializadorRegistroUbicacionEntrada(many=True)

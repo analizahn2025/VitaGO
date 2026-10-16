@@ -37,9 +37,7 @@ def _consulta_base_solicitudes():
         "tipo_servicio",
         "origen",
         "destino",
-        "movimiento_especial",
-        "movimiento_especial__jornada",
-    )
+    ).prefetch_related("movimientos_especiales__jornada")
 
 
 def listar_tipos_servicio_autorizados(usuario):

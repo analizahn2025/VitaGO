@@ -108,11 +108,13 @@ def consolidar_movimiento(movimiento, sesiones=None, motivo="CIERRE"):
     def puntos():
         yield (movimiento.latitud_inicio, movimiento.longitud_inicio, None, None, movimiento.iniciada_en)
         yield from registros
-        yield (movimiento.latitud_fin, movimiento.longitud_fin, None, None, movimiento.finalizada_en)
+        if movimiento.latitud_fin is not None and movimiento.longitud_fin is not None:
+            yield (movimiento.latitud_fin, movimiento.longitud_fin, None, None, movimiento.finalizada_en)
 
     medicion = medir_puntos(puntos())
     # Los extremos son eventos operativos, no registros GPS del lote.
-    medicion["puntos_considerados"] = max(0, medicion["puntos_considerados"] - 2)
+    extremos = 1 + int(movimiento.latitud_fin is not None and movimiento.longitud_fin is not None)
+    medicion["puntos_considerados"] = max(0, medicion["puntos_considerados"] - extremos)
     medicion["segundos_operativos"] = (movimiento.finalizada_en - movimiento.iniciada_en).total_seconds()
     return _guardar_medicion(movimiento, medicion, sesiones, movimiento.finalizada_en, motivo)
 

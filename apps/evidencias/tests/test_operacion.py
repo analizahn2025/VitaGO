@@ -13,6 +13,8 @@ from apps.evidencias.opciones import TipoEvidenciaSolicitud
 from apps.evidencias.servicios import registrar_evidencia
 from apps.flota.models import Vehiculo
 from apps.geografia.models import Pais
+from apps.jornadas.models import JornadaRepartidor
+from apps.nucleo.tests.imagenes import crear_imagen_prueba
 from apps.organizaciones.models import Empresa
 from apps.repartidores.models import Repartidor
 from apps.repartidores.opciones import (
@@ -128,6 +130,7 @@ class PruebasOperacionConEvidencias(TestCase):
         )
 
     def setUp(self):
+        self.jornada = JornadaRepartidor.objects.create(repartidor=self.repartidor)
         self.solicitud = Solicitud.objects.create(
             numero=f"SOL-EVIDENCIA-{Solicitud.objects.count() + 1}",
             empresa=self.empresa,
@@ -147,11 +150,7 @@ class PruebasOperacionConEvidencias(TestCase):
         )
 
     def _archivo_png(self, nombre="evidencia.png"):
-        return SimpleUploadedFile(
-            nombre,
-            b"\x89PNG\r\n\x1a\n" + (b"\x00" * 32),
-            content_type="image/png",
-        )
+        return crear_imagen_prueba(nombre=nombre)
 
     def _registrar(self, tipo):
         return registrar_evidencia(
@@ -212,6 +211,66 @@ class PruebasOperacionConEvidencias(TestCase):
 
         self.solicitud.refresh_from_db()
         self.assertEqual(self.solicitud.estado, EstadoSolicitud.EN_RECOLECCION)
+
+    def test_api_foto_corrupta_no_crea_evidencia_ni_permite_recoleccion(self):
+        self._transicion(EstadoSolicitud.HACIA_RECOLECCION)
+        self._transicion(EstadoSolicitud.EN_RECOLECCION)
+        cliente = APIClient()
+        cliente.force_authenticate(self.usuario_repartidor)
+        respuesta = cliente.post(
+            reverse("solicitudes:evidencias:lista-registro", kwargs={"solicitud_id": self.solicitud.id}),
+            {"tipo": TipoEvidenciaSolicitud.FOTO_RECOLECCION,
+             "archivo": SimpleUploadedFile("corrupta.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, content_type="image/png"),
+             "latitud": "14.072300", "longitud": "-87.192100", "capturada_en": timezone.now().isoformat()},
+            format="multipart",
+        )
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("archivo", respuesta.data)
+        self.assertFalse(EvidenciaSolicitud.objects.exists())
+        with self.assertRaises(ValidationError):
+            self._transicion(EstadoSolicitud.RECOLECTADA)
+
+    def test_todas_las_transiciones_operativas_exigen_jornada(self):
+        self.jornada.delete()  # Solo datos temporales de esta prueba.
+        cliente = APIClient()
+        cliente.force_authenticate(self.usuario_repartidor)
+        for origen, destino in (
+            (EstadoSolicitud.ASIGNADA, EstadoSolicitud.HACIA_RECOLECCION),
+            (EstadoSolicitud.HACIA_RECOLECCION, EstadoSolicitud.EN_RECOLECCION),
+            (EstadoSolicitud.EN_RECOLECCION, EstadoSolicitud.RECOLECTADA),
+            (EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO),
+            (EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO),
+            (EstadoSolicitud.EN_DESTINO, EstadoSolicitud.ENTREGADA),
+            (EstadoSolicitud.EN_RECOLECCION, EstadoSolicitud.RECOLECCION_FALLIDA),
+            (EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.ENTREGA_FALLIDA),
+        ):
+            with self.subTest(destino=destino):
+                Solicitud.objects.filter(pk=self.solicitud.pk).update(estado=origen)
+                respuesta = cliente.post(
+                    reverse("solicitudes:transicion", args=[self.solicitud.id]),
+                    {"estado_destino": destino, "motivo": "Prueba sin jornada"}, format="json",
+                )
+                self.assertEqual(respuesta.status_code, 400)
+                self.assertIn("jornada", respuesta.data)
+                self.solicitud.refresh_from_db()
+                self.assertEqual(self.solicitud.estado, origen)
+        self.assertFalse(EventoSolicitud.objects.exists())
+        self.assertEqual(AsignacionSolicitud.objects.get(solicitud=self.solicitud).estado, EstadoAsignacionSolicitud.ACTIVA)
+
+    def test_jornada_finalizada_no_habilita_operacion(self):
+        self.jornada.estado = "FINALIZADA"
+        self.jornada.finalizada_en = timezone.now()
+        self.jornada.save(update_fields=("estado", "finalizada_en", "actualizado_en"))
+        with self.assertRaises(ValidationError) as error:
+            self._transicion(EstadoSolicitud.HACIA_RECOLECCION)
+        self.assertIn("jornada", error.exception.detail)
+
+    def test_cancelacion_administrativa_no_exige_jornada(self):
+        self.jornada.delete()
+        solicitud = cambiar_estado_solicitud(self.administrador, self.solicitud.id, {
+            "estado_destino": EstadoSolicitud.CANCELADA, "motivo": "Cancelación administrativa de prueba",
+        })
+        self.assertEqual(solicitud.estado, EstadoSolicitud.CANCELADA)
 
     def test_endpoint_registra_y_descarga_archivo_autenticado(self):
         self.solicitud.estado = EstadoSolicitud.EN_RECOLECCION

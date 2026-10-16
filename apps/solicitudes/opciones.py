@@ -43,6 +43,8 @@ ESTADOS_SOLICITUD_ACTIVOS = (
 
 
 class TipoEventoSolicitud(models.TextChoices):
+    REASIGNACION_PENDIENTE = "REASIGNACION_PENDIENTE", "Reasignación pendiente"
+    CIERRE_AUTOMATICO = "CIERRE_AUTOMATICO", "Cierre automático"
     CREADA = "CREADA", "Creada"
     ASIGNADA = "ASIGNADA", "Asignada"
     REASIGNADA = "REASIGNADA", "Reasignada"

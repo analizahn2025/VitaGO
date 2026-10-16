@@ -11,7 +11,7 @@ def crear_notificaciones_asignacion(solicitud, evento, repartidor, anterior=None
     if solicitud.prioridad == PrioridadSolicitud.PRIORITARIA:
         tipo = TipoNotificacion.SOLICITUD_PRIORITARIA
         titulo = "Servicio prioritario asignado"
-    elif anterior is not None:
+    elif anterior is not None or evento.tipo == "REASIGNADA":
         tipo = TipoNotificacion.SOLICITUD_REASIGNADA
         titulo = "Servicio reasignado"
     else:

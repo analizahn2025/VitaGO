@@ -167,18 +167,38 @@ def movimiento_correspondiente(registrada_en, jornada_id, movimientos):
 @transaction.atomic
 def confirmar_sincronizacion_movimiento(usuario, solicitud_id, datos):
     from apps.solicitudes.models import Solicitud
-    from apps.solicitudes.servicios import _obtener_repartidor_operativo
     from apps.seguimiento.sincronizacion import consolidar_movimiento, normalizar_sesiones
 
     try:
-        solicitud = Solicitud.objects.select_for_update().select_related("empresa", "sucursal").get(pk=solicitud_id)
+        solicitud = (
+            Solicitud.objects.select_for_update(of=("self",))
+            .select_related("empresa", "sucursal")
+            .get(pk=solicitud_id)
+        )
     except Solicitud.DoesNotExist as error:
         raise Http404("La solicitud no existe.") from error
-    repartidor = _obtener_repartidor_operativo(usuario, solicitud)
+    # El anterior motorista conserva derecho a sincronizar SU tramo después
+    # de un traspaso, sin obtener control sobre la nueva asignación.
+    from apps.repartidores.models import Repartidor
+    from apps.usuarios.servicios import usuario_tiene_permiso
+    from rest_framework.exceptions import PermissionDenied
+
+    repartidor = Repartidor.objects.select_for_update(of=("self",)).filter(
+        usuario=usuario, activo=True,
+    ).first()
+    if repartidor is None or not usuario_tiene_permiso(
+        usuario, "solicitud.actualizar_estado", empresa=solicitud.empresa, sucursal=solicitud.sucursal,
+    ):
+        raise PermissionDenied("Solo el motorista propietario puede confirmar su tramo GPS.")
     try:
-        movimiento = MovimientoEnvioEspecial.objects.select_for_update().get(
+        consulta = MovimientoEnvioEspecial.objects.select_for_update().filter(
             solicitud=solicitud, repartidor=repartidor, estado=EstadoMovimientoEnvioEspecial.FINALIZADO,
         )
+        if datos.get("movimiento_id"):
+            consulta = consulta.filter(pk=datos["movimiento_id"])
+        if consulta.count() > 1:
+            raise ValidationError({"movimiento_id": "Indique el tramo que desea sincronizar."})
+        movimiento = consulta.get()
     except MovimientoEnvioEspecial.DoesNotExist as error:
         raise Http404("La solicitud no tiene un movimiento especial finalizado.") from error
     if not movimiento.calidad_kilometraje:

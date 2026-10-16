@@ -5,6 +5,7 @@ import uuid
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Q
 from django.core.exceptions import ValidationError as ValidacionModelo
 from django.http import Http404
 from django.utils import timezone
@@ -46,7 +47,7 @@ from apps.repartidores.capacidad import (
     sincronizar_capacidad_repartidor,
 )
 from apps.repartidores.opciones import EstadoOperativoRepartidor
-from apps.usuarios.models import RolUsuario
+from apps.usuarios.models import RolUsuario, Usuario
 from apps.usuarios.opciones import EstadoUsuario, TipoAlcanceRol
 from apps.usuarios.servicios import usuario_tiene_permiso
 from apps.notificaciones.servicios import crear_notificaciones_asignacion
@@ -318,11 +319,28 @@ def _validar_rol_operativo_repartidor(repartidor, empresa):
 
 
 def _validar_repartidor_disponible(repartidor, solicitud):
+    from apps.solicitudes.vigencia import exigir_vigencia_solicitud, limite_dia_operativo
+
+    exigir_vigencia_solicitud(solicitud)
     cantidad = contar_solicitudes_activas(repartidor)
     if cantidad >= LIMITE_SOLICITUDES:
         raise LimiteSolicitudesRepartidor()
-    if not repartidor.activo or repartidor.usuario.estado != EstadoUsuario.ACTIVO:
+    if not repartidor.activo or not Usuario.objetos.filter(pk=repartidor.usuario_id, estado=EstadoUsuario.ACTIVO).exists():
         raise ValidationError({"repartidor_id": "El motorista no está activo."})
+    if settings.MODO_APLICACION == "CORPORATIVO":
+        from apps.jornadas.models import JornadaRepartidor
+
+        jornada = JornadaRepartidor.objects.filter(repartidor=repartidor, estado="ACTIVA").first()
+        if jornada and timezone.now() >= limite_dia_operativo(jornada.iniciada_en, solicitud.empresa):
+            raise ValidationError({"repartidor_id": "La jornada pertenece a un día operativo terminado."})
+        if solicitud.reasignacion_pendiente and solicitud.estado in (
+            EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO,
+        ) and jornada is None:
+            raise ValidationError({"repartidor_id": "Continuar una entrega requiere jornada activa."})
+        if solicitud.reasignacion_pendiente and solicitud.modalidad == ModalidadSolicitud.ESPECIAL and solicitud.estado in (
+            EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO,
+        ) and (cantidad or jornada is None):
+            raise ValidationError({"repartidor_id": "Continuar un especial requiere jornada activa y dedicación exclusiva."})
     if repartidor.estado_operativo not in (
         EstadoOperativoRepartidor.DISPONIBLE,
         EstadoOperativoRepartidor.EN_RUTA,
@@ -383,7 +401,7 @@ def asignar_solicitud_manualmente(usuario, identificador_solicitud, datos_valida
     except (Solicitud.DoesNotExist, ValueError) as error:
         raise Http404("La solicitud no existe.") from error
 
-    if solicitud.estado not in (
+    if not (solicitud.reasignacion_pendiente and solicitud.estado in ESTADOS_SOLICITUD_ACTIVOS) and solicitud.estado not in (
         EstadoSolicitud.PENDIENTE,
         EstadoSolicitud.ASIGNADA,
     ):
@@ -448,13 +466,15 @@ def _registrar_asignacion(
     distancia_gps_km=None,
 ):
     """Persiste asignación, auditoría, capacidad y aviso en una transacción."""
-    es_reasignacion = repartidor_anterior is not None
+    es_contingencia = solicitud.reasignacion_pendiente
+    estado_anterior = solicitud.estado
+    es_reasignacion = repartidor_anterior is not None or es_contingencia
     asignacion_anterior = (
         AsignacionSolicitud.objects.select_for_update()
         .filter(solicitud=solicitud, estado=EstadoAsignacionSolicitud.ACTIVA)
         .first()
     )
-    if es_reasignacion and asignacion_anterior is None:
+    if es_reasignacion and not es_contingencia and asignacion_anterior is None:
         raise ValidationError(
             "La solicitud no posee una asignación activa consistente."
         )
@@ -478,19 +498,34 @@ def _registrar_asignacion(
         tipo=tipo,
         estado=EstadoAsignacionSolicitud.ACTIVA,
         asignada_en=ahora,
+        aceptada_en=ahora if es_contingencia and estado_anterior in (
+            EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO,
+        ) else None,
         motivo=motivo,
     )
     repartidor_anterior_id = solicitud.repartidor_asignado_id
+    if es_contingencia:
+        repartidor_anterior_id = solicitud.asignaciones.filter(
+            estado=EstadoAsignacionSolicitud.REASIGNADA,
+        ).order_by("-finalizada_en", "-pk").values_list("repartidor_id", flat=True).first()
     solicitud.repartidor_asignado = repartidor
-    solicitud.estado = EstadoSolicitud.ASIGNADA
+    continua_entrega = es_contingencia and estado_anterior in (
+        EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO,
+    )
+    # Ya recogido: conservar la entrega, sin volver a pedir recolección.
+    solicitud.estado = estado_anterior if continua_entrega else EstadoSolicitud.ASIGNADA
+    solicitud.reasignacion_pendiente = False
     solicitud.asignada_en = ahora
     solicitud.save(
         update_fields=(
-            "repartidor_asignado", "estado", "asignada_en", "actualizado_en"
+            "repartidor_asignado", "estado", "asignada_en", "reasignacion_pendiente", "actualizado_en"
         )
     )
 
     metadatos = {
+        "contingencia_suspension": es_contingencia,
+        "continua_entrega": continua_entrega,
+        "traspaso_fisico_fuera_app": continua_entrega,
         "repartidor_id": str(repartidor.id),
         "repartidor_anterior_id": (
             str(repartidor_anterior_id) if repartidor_anterior_id else None
@@ -514,6 +549,19 @@ def _registrar_asignacion(
     sincronizar_capacidad_repartidor(
         repartidor, usuario, "Asignación de solicitud."
     )
+    if continua_entrega:
+        if solicitud.modalidad == ModalidadSolicitud.ESPECIAL:
+            from apps.seguimiento.vigencia import posiciones_vigentes
+            from apps.solicitudes.servicios_movimientos import iniciar_movimiento_especial
+
+            posicion = posiciones_vigentes().filter(repartidor=repartidor).first()
+            if posicion is None:
+                raise ValidationError({"repartidor_id": "Se requiere GPS vigente para continuar un envío especial."})
+            iniciar_movimiento_especial(solicitud, repartidor, latitud=posicion.latitud, longitud=posicion.longitud, ahora=ahora)
+        _registrar_cambio_operativo_repartidor(
+            repartidor, usuario, estado_nuevo=EstadoOperativoRepartidor.EN_RUTA,
+            motivo="Continuación de entrega por suspensión del motorista anterior.",
+        )
     if repartidor_anterior is not None:
         sincronizar_capacidad_repartidor(
             repartidor_anterior, usuario, "Reasignación de solicitud."
@@ -566,6 +614,12 @@ def _asignar_automaticamente(solicitud, usuario):
 
         if settings.ASIGNACION_REQUIERE_GPS_VIGENTE and not posiciones_vigentes().filter(repartidor=repartidor).exists():
             continue
+        # La validación del tramo especial también necesita GPS, incluso
+        # cuando se habilitó expresamente el fallback de asignación sin GPS.
+        if solicitud.reasignacion_pendiente and solicitud.modalidad == ModalidadSolicitud.ESPECIAL and solicitud.estado in (
+            EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO,
+        ) and not posiciones_vigentes().filter(repartidor=repartidor).exists():
+            continue
         return _registrar_asignacion(
             solicitud,
             repartidor,
@@ -582,23 +636,31 @@ def _asignar_automaticamente(solicitud, usuario):
 
 
 @transaction.atomic
-def _reintentar_primera_solicitud_pendiente(empresa_id):
+def _reintentar_primera_solicitud_pendiente(empresa_id, excluir_ids=()):
     """Bloquea la pendiente más antigua antes de buscar un motorista."""
     solicitud = (
         Solicitud.objects.select_for_update(of=("self",), skip_locked=True)
         .select_related("empresa", "origen", "solicitada_por")
         .filter(
             empresa_id=empresa_id,
-            estado=EstadoSolicitud.PENDIENTE,
             repartidor_asignado__isnull=True,
         )
-        .order_by("creado_en", "id")
+        .filter(Q(estado=EstadoSolicitud.PENDIENTE) | Q(reasignacion_pendiente=True, estado__in=ESTADOS_SOLICITUD_ACTIVOS))
+        .exclude(pk__in=excluir_ids)
+        .order_by("-reasignacion_pendiente", "creado_en", "id")
         .first()
     )
     if solicitud is None:
-        return False
+        return False, None
+    from apps.solicitudes.vigencia import exigir_vigencia_solicitud
+    try:
+        exigir_vigencia_solicitud(solicitud)
+    except ValidationError:
+        from apps.solicitudes.contingencias import cerrar_solicitud_vencida
+        cerrar_solicitud_vencida(solicitud.pk)
+        return "CERRADA", solicitud.pk
     _asignar_automaticamente(solicitud, solicitud.solicitada_por)
-    return solicitud.estado == EstadoSolicitud.ASIGNADA
+    return solicitud.repartidor_asignado_id is not None, solicitud.pk
 
 
 def reintentar_solicitudes_pendientes(empresa_id):
@@ -606,10 +668,16 @@ def reintentar_solicitudes_pendientes(empresa_id):
     if settings.MODO_APLICACION != "CORPORATIVO" or empresa_id is None:
         return 0
     asignadas = 0
-    for _ in range(LIMITE_SOLICITUDES):
-        if not _reintentar_primera_solicitud_pendiente(empresa_id):
+    examinadas = []
+    for _ in range(50):
+        resultado, solicitud_id = _reintentar_primera_solicitud_pendiente(empresa_id, examinadas)
+        if solicitud_id is None:
             break
-        asignadas += 1
+        examinadas.append(solicitud_id)
+        if resultado is True:
+            asignadas += 1
+            if asignadas == LIMITE_SOLICITUDES:
+                break
     return asignadas
 
 
@@ -773,17 +841,19 @@ def _cerrar_asignacion(solicitud, repartidor, usuario, estado_destino, ahora):
         repartidor=repartidor,
         estado=EstadoAsignacionSolicitud.ACTIVA,
     ).exclude(solicitud=solicitud).exists()
-    if tiene_otras_asignaciones:
+    admite_asignaciones = repartidor.estado_operativo in (
+        EstadoOperativoRepartidor.DISPONIBLE,
+        EstadoOperativoRepartidor.EN_RUTA,
+    )
+    # Cerrar un servicio no debe levantar una pausa ni una suspensión operativa.
+    if admite_asignaciones and tiene_otras_asignaciones:
         _registrar_cambio_operativo_repartidor(
             repartidor,
             usuario,
             estado_nuevo=EstadoOperativoRepartidor.EN_RUTA,
             motivo="La solicitud terminó; conserva otras asignaciones activas.",
         )
-    elif repartidor.estado_operativo in (
-        EstadoOperativoRepartidor.DISPONIBLE,
-        EstadoOperativoRepartidor.EN_RUTA,
-    ):
+    elif admite_asignaciones:
         _registrar_cambio_operativo_repartidor(
             repartidor,
             usuario,
@@ -806,6 +876,8 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
     except (Solicitud.DoesNotExist, ValueError) as error:
         raise Http404("La solicitud no existe.") from error
 
+    from apps.solicitudes.vigencia import exigir_vigencia_solicitud
+    exigir_vigencia_solicitud(solicitud)
     estado_destino = datos_validados["estado_destino"]
     if estado_destino in {
         EstadoSolicitud.CANCELADA,
@@ -848,6 +920,15 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
             ).get(id=solicitud.repartidor_asignado_id)
     else:
         repartidor = _obtener_repartidor_operativo(usuario, solicitud)
+        from apps.jornadas.models import JornadaRepartidor
+        from apps.jornadas.opciones import EstadoJornada
+
+        if not JornadaRepartidor.objects.select_for_update(of=("self",)).filter(
+            repartidor=repartidor, estado=EstadoJornada.ACTIVA,
+        ).exists():
+            raise ValidationError(
+                {"jornada": "Debe iniciar una jornada antes de operar la solicitud."}
+            )
         exclusiva = Solicitud.objects.filter(
             repartidor_asignado=repartidor,
             prioridad=PrioridadSolicitud.PRIORITARIA,
@@ -885,6 +966,10 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
     estado_anterior = solicitud.estado
     solicitud.estado = estado_destino
     campos_actualizados = ["estado", "actualizado_en"]
+    if estado_destino in ESTADOS_TERMINALES:
+        solicitud.reasignacion_pendiente = False
+        solicitud.cerrada_en = ahora
+        campos_actualizados += ["reasignacion_pendiente", "cerrada_en"]
     campo_fecha = {
         EstadoSolicitud.EN_RECOLECCION: "llegada_recoleccion_en",
         EstadoSolicitud.RECOLECTADA: "recolectada_en",

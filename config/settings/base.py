@@ -268,6 +268,9 @@ if TAMANO_MAXIMO_EVIDENCIA_MB < 1:
     raise ImproperlyConfigured(
         "TAMANO_MAXIMO_EVIDENCIA_MB debe ser mayor o igual a 1."
     )
+PIXELES_MAXIMOS_EVIDENCIA = env.int("PIXELES_MAXIMOS_EVIDENCIA", default=40000000)
+if PIXELES_MAXIMOS_EVIDENCIA < 1:
+    raise ImproperlyConfigured("PIXELES_MAXIMOS_EVIDENCIA debe ser mayor o igual a 1.")
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 ALGORITMO_JWT_LOCAL = env.str(

@@ -1,6 +1,7 @@
 from datetime import timedelta
 from decimal import Decimal
 from uuid import uuid4
+from unittest.mock import patch
 
 from django.urls import reverse
 from django.utils import timezone
@@ -19,6 +20,144 @@ from apps.solicitudes.servicios import cambiar_estado_solicitud
 
 
 class PruebasSincronizacionGPS(PruebasSeguimiento):
+    def preparar_especial_finalizado(self):
+        from apps.solicitudes.servicios_movimientos import iniciar_movimiento_especial, cerrar_movimiento_especial
+
+        self.solicitud.modalidad = "ESPECIAL"
+        self.solicitud.destino = None
+        self.solicitud.destino_especial = "Encargo de prueba"
+        self.solicitud.save()
+        inicio = self.ahora - timedelta(minutes=4)
+        movimiento = iniciar_movimiento_especial(
+            self.solicitud, self.repartidor, latitud=Decimal("14"), longitud=Decimal("-87"), ahora=inicio,
+        )
+        fin = inicio + timedelta(seconds=40)
+        cerrar_movimiento_especial(
+            self.solicitud, self.repartidor, latitud=Decimal("14.0004"), longitud=Decimal("-87"), ahora=fin,
+        )
+        self.solicitud.estado = EstadoSolicitud.ENTREGADA
+        self.solicitud.entregada_en = fin
+        self.solicitud.save()
+        self.asignacion.estado = EstadoAsignacionSolicitud.FINALIZADA
+        self.asignacion.finalizada_en = fin
+        self.asignacion.save()
+        return movimiento
+
+    def test_confirmacion_especial_bloquea_solo_solicitud_y_es_idempotente(self):
+        movimiento = self.preparar_especial_finalizado()
+        cliente = APIClient()
+        cliente.force_authenticate(self.usuario_repartidor)
+        url = reverse("solicitudes:sincronizacion-gps", args=[self.solicitud.id])
+        # SQLite no reproduce el error del JOIN nullable de PostgreSQL:
+        # conservar explícitamente el alcance del bloqueo en el contrato del servicio.
+        with patch.object(Solicitud.objects, "select_for_update", wraps=Solicitud.objects.select_for_update) as bloquear:
+            respuesta = cliente.post(url, {"sesiones_gps": []}, format="json")
+        self.assertEqual(respuesta.status_code, 200)
+        bloquear.assert_called_once_with(of=("self",))
+        movimiento.refresh_from_db()
+        self.assertTrue(movimiento.calidad_kilometraje["sincronizacion_verificada"])
+        cantidad = RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count()
+        self.assertEqual(cliente.post(url, {"sesiones_gps": []}, format="json").status_code, 200)
+        self.assertEqual(RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count(), cantidad)
+
+    def test_confirmacion_especial_permite_jornada_ya_finalizada(self):
+        movimiento = self.preparar_especial_finalizado()
+        finalizar_jornada(self.usuario_repartidor, self.jornada.id, {})
+        cliente = APIClient()
+        cliente.force_authenticate(self.usuario_repartidor)
+        respuesta = cliente.post(
+            reverse("solicitudes:sincronizacion-gps", args=[self.solicitud.id]), {"sesiones_gps": []}, format="json",
+        )
+        self.assertEqual(respuesta.status_code, 200)
+        movimiento.refresh_from_db()
+        self.assertTrue(movimiento.calidad_kilometraje["sincronizacion_verificada"])
+
+    def test_confirmacion_especial_rechaza_a_otro_usuario(self):
+        movimiento = self.preparar_especial_finalizado()
+        cliente = APIClient()
+        cliente.force_authenticate(self.solicitante)
+        respuesta = cliente.post(
+            reverse("solicitudes:sincronizacion-gps", args=[self.solicitud.id]), {"sesiones_gps": []}, format="json",
+        )
+        self.assertEqual(respuesta.status_code, 403)
+        movimiento.refresh_from_db()
+        self.assertFalse(movimiento.calidad_kilometraje["sincronizacion_verificada"])
+
+    def test_especial_verificado_bloquea_puntos_nuevos_en_todo_el_prefijo(self):
+        from apps.solicitudes.servicios_movimientos import confirmar_sincronizacion_movimiento
+
+        movimiento = self.preparar_especial_finalizado()
+        confirmar_sincronizacion_movimiento(self.usuario_repartidor, self.solicitud.pk, {"sesiones_gps": []})
+        movimiento.refresh_from_db()
+        calidad = dict(movimiento.calidad_kilometraje)
+        revisiones = RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count()
+        for segundos in (-20, 0, 20, 40):
+            with self.subTest(segundos=segundos):
+                punto = {**self._registro(movimiento.iniciada_en + timedelta(seconds=segundos)),
+                         "sesion_gps": uuid4(), "secuencia": 1}
+                with self.assertRaises(ValidationError) as rechazo:
+                    registrar_ubicaciones(self.usuario_repartidor, {"jornada_id": self.jornada.pk, "registros": [punto]})
+                self.assertIn("registrada_en", rechazo.exception.detail["registros"][0])
+        movimiento.refresh_from_db()
+        self.assertEqual(RegistroUbicacion.objects.filter(jornada=self.jornada).count(), 0)
+        self.assertEqual(movimiento.calidad_kilometraje, calidad)
+        self.assertEqual(RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count(), revisiones)
+
+    def test_lote_mixto_con_punto_de_prefijo_verificado_da_400_sin_guardar_parcialmente(self):
+        from apps.solicitudes.servicios_movimientos import confirmar_sincronizacion_movimiento
+
+        movimiento = self.preparar_especial_finalizado()
+        confirmar_sincronizacion_movimiento(self.usuario_repartidor, self.solicitud.pk, {"sesiones_gps": []})
+        movimiento.refresh_from_db()
+        cliente = APIClient()
+        cliente.force_authenticate(self.usuario_repartidor)
+        sesion = uuid4()
+        registros = [
+            {**self._registro(instante), "sesion_gps": str(sesion), "secuencia": indice + 1}
+            for indice, instante in enumerate((movimiento.finalizada_en + timedelta(seconds=1), movimiento.iniciada_en))
+        ]
+        respuesta = cliente.post(reverse("seguimiento:registros"), {
+            "jornada_id": str(self.jornada.pk), "registros": registros,
+        }, format="json")
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("registrada_en", respuesta.data["registros"][1])
+        self.assertEqual(RegistroUbicacion.objects.filter(jornada=self.jornada).count(), 0)
+
+    def test_especial_verificado_permite_reintento_y_continuar_misma_sesion_despues(self):
+        from apps.solicitudes.servicios_movimientos import confirmar_sincronizacion_movimiento
+
+        movimiento = self.preparar_especial_finalizado()
+        sesion = uuid4()
+        punto = {**self._registro(movimiento.iniciada_en + timedelta(seconds=20)),
+                 "sesion_gps": sesion, "secuencia": 1}
+        registrar_ubicaciones(self.usuario_repartidor, {"jornada_id": self.jornada.pk, "registros": [punto]})
+        confirmar_sincronizacion_movimiento(self.usuario_repartidor, self.solicitud.pk, {
+            "sesiones_gps": [{"sesion_gps": sesion, "ultima_secuencia": 1}],
+        })
+        movimiento.refresh_from_db()
+        calidad = dict(movimiento.calidad_kilometraje)
+        cantidad = RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count()
+        lote_repetido = {"jornada_id": self.jornada.pk, "registros": [punto]}
+        self.assertEqual(registrar_ubicaciones(self.usuario_repartidor, lote_repetido)["repetidos"], 1)
+        siguiente = {**self._registro(movimiento.finalizada_en + timedelta(seconds=1)),
+                     "sesion_gps": sesion, "secuencia": 2}
+        resultado = registrar_ubicaciones(self.usuario_repartidor, {
+            "jornada_id": self.jornada.pk, "registros": [punto, siguiente],
+        })
+        self.assertEqual((resultado["creados"], resultado["repetidos"]), (1, 1))
+        self.assertIsNone(resultado["registros"][1].movimiento_envio_especial_id)
+        movimiento.refresh_from_db()
+        self.assertEqual(movimiento.calidad_kilometraje, calidad)
+        self.assertEqual(RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count(), cantidad)
+
+    def test_especial_sin_verificar_sigue_admitiendo_gps_tardio(self):
+        movimiento = self.preparar_especial_finalizado()
+        punto = {**self._registro(movimiento.iniciada_en + timedelta(seconds=20)),
+                 "sesion_gps": uuid4(), "secuencia": 1}
+        resultado = registrar_ubicaciones(self.usuario_repartidor, {"jornada_id": self.jornada.pk, "registros": [punto]})
+        self.assertEqual(resultado["creados"], 1)
+        self.assertEqual(resultado["registros"][0].movimiento_envio_especial_id, movimiento.pk)
+
     def preparar_cierre(self, omitir=()):
         self.sesion = uuid4()
         inicio = self.ahora - timedelta(minutes=5)
@@ -167,6 +306,18 @@ class PruebasSincronizacionGPS(PruebasSeguimiento):
         cerrado.refresh_from_db()
         self.assertTrue(cerrado.calidad_kilometraje["sincronizacion_verificada"])
         self.assertEqual(cerrado.calidad_kilometraje["estado"], "INCOMPLETO")  # Extremos sin precisión.
+        self.assertEqual(RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count(), 2)
+        # La consolidación automática también sella el prefijo, aunque su
+        # calidad sea INCOMPLETO; reintentar lo recibido continúa permitido.
+        repetido = registrar_ubicaciones(self.usuario_repartidor, {
+            "jornada_id": self.jornada.id, "registros": [puntos[1]],
+        })
+        self.assertEqual(repetido["repetidos"], 1)
+        inesperado = {**puntos[1], "id_cliente": uuid4(), "secuencia": 4}
+        with self.assertRaises(ValidationError):
+            registrar_ubicaciones(self.usuario_repartidor, {
+                "jornada_id": self.jornada.id, "registros": [inesperado],
+            })
         self.assertEqual(RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count(), 2)
 
     def test_prioritario_recogido_bloquea_operacion_de_otra_solicitud(self):

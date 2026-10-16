@@ -647,8 +647,13 @@ class PruebasAsignacionesSolicitud(TestCase):
         )
 
     def test_reintento_respeta_cupo_y_antiguedad(self):
+        from zoneinfo import ZoneInfo
+
+        # Antigüedad dentro del día vigente: las de ayer ahora deben cerrarse.
         Solicitud.objects.filter(id=self.solicitud.id).update(
-            creado_en=timezone.now() - timedelta(days=1)
+            creado_en=timezone.now().astimezone(ZoneInfo(self.pais.zona_horaria_predeterminada)).replace(
+                hour=0, minute=0, second=0, microsecond=0,
+            )
         )
         Repartidor.objects.filter(
             id__in=[repartidor.id for repartidor in self.repartidores]

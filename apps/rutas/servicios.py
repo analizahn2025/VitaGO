@@ -32,7 +32,7 @@ def _firma_persistida(parada):
     )
 
 
-def sincronizar_ruta(repartidor, motivo, *, jornada=None, cerrar=False):
+def sincronizar_ruta(repartidor, motivo, *, jornada=None, cerrar=False, finalizada_en=None):
     """Guarda una versión solo si cambió la secuencia de paradas.
 
     Quien llama debe mantener bloqueada la fila del motorista y una
@@ -103,6 +103,6 @@ def sincronizar_ruta(repartidor, motivo, *, jornada=None, cerrar=False):
 
     if cerrar or (not paradas and ruta.jornada_id is None):
         ruta.estado = RutaRepartidor.Estado.FINALIZADA
-        ruta.finalizada_en = timezone.now()
+        ruta.finalizada_en = finalizada_en or timezone.now()
         ruta.save(update_fields=("estado", "finalizada_en", "actualizado_en"))
     return ruta

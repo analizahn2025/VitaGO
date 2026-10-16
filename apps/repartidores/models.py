@@ -118,6 +118,8 @@ class HistorialEstadoRepartidor(ModeloUUIDConMarcasDeTiempo):
         "usuarios.Usuario",
         on_delete=models.PROTECT,
         related_name="cambios_operativos_repartidores",
+        null=True,
+        blank=True,
     )
     motivo = models.TextField(null=True, blank=True)
 

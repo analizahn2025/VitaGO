@@ -1,6 +1,7 @@
 """Casos de uso para registrar ubicaciones enviadas por los dispositivos."""
 
 from django.db import transaction
+from django.conf import settings
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
@@ -9,7 +10,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 from apps.jornadas.models import JornadaRepartidor
 from apps.repartidores.models import Repartidor
 from apps.seguimiento.models import RegistroUbicacion
-from apps.solicitudes.models import AsignacionSolicitud
+from apps.solicitudes.models import AsignacionSolicitud, MovimientoEnvioEspecial
+from apps.solicitudes.opciones import EstadoMovimientoEnvioEspecial
 from apps.solicitudes.servicios_movimientos import (
     movimiento_correspondiente,
     obtener_movimientos_para_registros,
@@ -35,7 +37,7 @@ def _obtener_jornada_propia(repartidor, jornada_id):
 
 
 def _validar_intervalo_jornada(jornada, registros, ahora):
-    limite_superior = jornada.finalizada_en or ahora
+    limite_superior = min(jornada.finalizada_en or ahora, ahora)
     errores = {}
     for indice, registro in enumerate(registros):
         if not jornada.iniciada_en <= registro["registrada_en"] <= limite_superior:
@@ -78,6 +80,37 @@ def _coincide_registro_existente(existente, jornada, datos):
     )
 
 
+def _validar_prefijos_especiales_verificados(jornada, registros, existentes):
+    # El manifiesto del especial confirma TODO el prefijo de la jornada,
+    # incluidos los puntos anteriores al inicio de ese movimiento.
+    # El motorista ya está bloqueado, igual que al confirmar un especial.
+    limite_verificado = (
+        MovimientoEnvioEspecial.objects.filter(
+            jornada=jornada,
+            estado=EstadoMovimientoEnvioEspecial.FINALIZADO,
+            calidad_kilometraje__sincronizacion_verificada=True,
+        )
+        .order_by("-finalizada_en")
+        .values_list("finalizada_en", flat=True)
+        .first()
+    )
+    if limite_verificado is None:
+        return
+    errores = {
+        indice: {
+            "registrada_en": (
+                "La fecha pertenece al prefijo GPS de un envío especial ya "
+                "consolidado; solo admite reintentos idénticos."
+            )
+        }
+        for indice, datos in enumerate(registros)
+        if datos["id_cliente"] not in existentes
+        and datos["registrada_en"] <= limite_verificado
+    }
+    if errores:
+        raise ValidationError({"registros": errores})
+
+
 @transaction.atomic
 def registrar_ubicaciones(usuario, datos_validados):
     repartidor = _obtener_repartidor_propio(usuario)
@@ -91,7 +124,11 @@ def registrar_ubicaciones(usuario, datos_validados):
 
     jornada = _obtener_jornada_propia(repartidor, datos_validados["jornada_id"])
     registros = datos_validados["registros"]
-    _validar_intervalo_jornada(jornada, registros, timezone.now())
+    limite = timezone.now()
+    if settings.MODO_APLICACION == "CORPORATIVO" and repartidor.empresa_id:
+        from apps.solicitudes.vigencia import limite_dia_operativo
+        limite = min(limite, limite_dia_operativo(jornada.iniciada_en, repartidor.empresa))
+    _validar_intervalo_jornada(jornada, registros, limite)
 
     identificadores = [registro["id_cliente"] for registro in registros]
     existentes = {
@@ -145,6 +182,8 @@ def registrar_ubicaciones(usuario, datos_validados):
     # Tras verificar un cierre no se admiten puntos nuevos que contradigan el manifiesto.
     if jornada.calidad_kilometraje.get("sincronizacion_verificada") and nuevos_datos:
         raise ValidationError({"registros": "La medición de esta jornada ya fue consolidada; solo admite reintentos idénticos."})
+    if nuevos_datos:
+        _validar_prefijos_especiales_verificados(jornada, registros, existentes)
     intervalos = (
         _intervalos_operativos(repartidor, nuevos_datos)
         if nuevos_datos

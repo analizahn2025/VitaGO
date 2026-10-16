@@ -124,7 +124,7 @@ def obtener_paradas_operativas(repartidor):
 def obtener_mi_ruta(usuario):
     """Lectura operativa: nunca modifica versiones ni consulta proveedores."""
     from apps.rutas.models import RutaRepartidor
-    from apps.rutas.navegacion import navegacion_parada
+    from apps.rutas.presentacion import presentar_mapa_integrado
     from apps.rutas.ruta_vial import presentar_ruta_vial
 
     repartidor = _obtener_repartidor_propio(usuario)
@@ -154,7 +154,7 @@ def obtener_mi_ruta(usuario):
         "orden_tipo": "ASIGNACION",
         "ruta_calculada": ruta_vial["estado"] == "CALCULADA",
         "ruta_vial": ruta_vial,
-        "navegacion": navegacion_parada(paradas[0] if paradas else None),
+        "mapa": presentar_mapa_integrado(paradas, ruta_vial),
         "proxima_parada": paradas[0] if paradas else None,
         "paradas": paradas,
     }

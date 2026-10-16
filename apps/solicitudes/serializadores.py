@@ -125,6 +125,7 @@ class SerializadorMovimientoEnvioEspecial(serializers.ModelSerializer):
             "registros_considerados",
             "registros_descartados",
             "calidad_kilometraje",
+            "motivo_cierre",
         )
 
 
@@ -159,13 +160,10 @@ class SerializadorSolicitudResumen(serializers.ModelSerializer):
         )
 
     def get_kilometros_envio_especial(self, solicitud):
-        try:
-            movimiento = solicitud.movimiento_especial
-        except MovimientoEnvioEspecial.DoesNotExist:
+        movimientos = list(solicitud.movimientos_especiales.all())
+        if not movimientos or any(m.estado != EstadoMovimientoEnvioEspecial.FINALIZADO for m in movimientos):
             return None
-        if movimiento.estado != EstadoMovimientoEnvioEspecial.FINALIZADO:
-            return None
-        return format(movimiento.kilometros_recorridos, ".3f")
+        return format(sum((m.kilometros_recorridos for m in movimientos), Decimal("0")), ".3f")
 
     class Meta:
         model = Solicitud
@@ -187,6 +185,9 @@ class SerializadorSolicitudResumen(serializers.ModelSerializer):
             "presentacion_ruta",
             "kilometros_envio_especial",
             "estado",
+            "reasignacion_pendiente",
+            "cerrada_en",
+            "motivo_cierre",
             "creado_en",
         )
 
@@ -196,6 +197,7 @@ class SerializadorSolicitudDetalle(SerializadorSolicitudResumen):
     eventos = SerializadorEventoSolicitud(many=True, read_only=True)
     asignaciones = SerializadorAsignacionSolicitud(many=True, read_only=True)
     movimiento_especial = serializers.SerializerMethodField()
+    movimientos_especiales = SerializadorMovimientoEnvioEspecial(many=True, read_only=True)
 
     def get_movimiento_especial(self, solicitud):
         try:
@@ -211,6 +213,7 @@ class SerializadorSolicitudDetalle(SerializadorSolicitudResumen):
             "eventos",
             "asignaciones",
             "movimiento_especial",
+            "movimientos_especiales",
             "asignada_en",
             "llegada_recoleccion_en",
             "recolectada_en",

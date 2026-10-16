@@ -3,7 +3,6 @@ import uuid
 from datetime import timedelta
 from decimal import Decimal
 
-from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -25,6 +24,7 @@ from apps.incidencias.servicios import (
 )
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.servicios import finalizar_jornada
+from apps.nucleo.tests.imagenes import crear_imagen_prueba
 from apps.organizaciones.models import Empresa
 from apps.repartidores.models import Repartidor
 from apps.repartidores.opciones import EstadoOperativoRepartidor
@@ -309,11 +309,7 @@ class PruebasIncidencias(TestCase):
         incidencia = crear_incidencia(self.repartidor.usuario, self._datos())
         cliente = APIClient()
         cliente.force_authenticate(self.repartidor.usuario)
-        imagen = SimpleUploadedFile(
-            "incidencia.png",
-            b"\x89PNG\r\n\x1a\n" + b"contenido-prueba",
-            content_type="image/png",
-        )
+        imagen = crear_imagen_prueba(nombre="incidencia.png")
 
         respuesta = cliente.post(
             reverse(

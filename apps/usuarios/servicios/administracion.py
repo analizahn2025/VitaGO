@@ -146,6 +146,19 @@ def _exigir_administracion_usuario(usuario_administrador, usuario_objetivo):
         usuario_objetivo.empresa,
         usuario_objetivo.sucursal,
     )
+    es_cuenta_de_plataforma = (
+        usuario_objetivo.es_superusuario
+        or RolUsuario.objetos.filter(
+            usuario=usuario_objetivo,
+            activo=True,
+            rol__activo=True,
+            rol__codigo="SUPERADMINISTRADOR",
+        ).exists()
+    )
+    if es_cuenta_de_plataforma and "SUPERADMINISTRADOR" not in roles_delegadores:
+        raise PermissionDenied(
+            "Solo un superadministrador puede administrar cuentas de superadministración."
+        )
     if not roles_delegadores or "GERENTE_OPERACIONES" not in roles_delegadores:
         return
     if roles_delegadores & {
@@ -624,6 +637,8 @@ def actualizar_usuario_administrado(
         and estado_nuevo != EstadoUsuario.ACTIVO
     ):
         revocar_sesiones_usuario_inactivo(usuario_bloqueado)
+        from apps.solicitudes.contingencias import programar_suspension
+        programar_suspension(usuario_bloqueado.pk, usuario_administrador)
     return usuario_bloqueado
 
 

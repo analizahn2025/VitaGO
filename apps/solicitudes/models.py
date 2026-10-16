@@ -109,6 +109,17 @@ class Solicitud(ModeloUUIDConMarcasDeTiempo):
     llegada_destino_en = models.DateTimeField(null=True, blank=True)
     entregada_en = models.DateTimeField(null=True, blank=True)
     cancelada_en = models.DateTimeField(null=True, blank=True)
+    reasignacion_pendiente = models.BooleanField(default=False, db_index=True)
+    cerrada_en = models.DateTimeField(null=True, blank=True)
+    motivo_cierre = models.CharField(max_length=40, blank=True, default="")
+
+    @property
+    def movimiento_especial(self):
+        """Compatibilidad: el detalle singular representa el último tramo."""
+        movimientos = list(self.movimientos_especiales.all())
+        if not movimientos:
+            raise MovimientoEnvioEspecial.DoesNotExist
+        return max(movimientos, key=lambda movimiento: (movimiento.iniciada_en, str(movimiento.pk)))
 
     class Meta:
         db_table = "solicitudes"
@@ -209,10 +220,10 @@ class Solicitud(ModeloUUIDConMarcasDeTiempo):
 
 
 class MovimientoEnvioEspecial(ModeloUUIDConMarcasDeTiempo):
-    solicitud = models.OneToOneField(
+    solicitud = models.ForeignKey(
         Solicitud,
         on_delete=models.PROTECT,
-        related_name="movimiento_especial",
+        related_name="movimientos_especiales",
     )
     repartidor = models.ForeignKey(
         "repartidores.Repartidor",
@@ -248,6 +259,7 @@ class MovimientoEnvioEspecial(ModeloUUIDConMarcasDeTiempo):
     registros_considerados = models.PositiveIntegerField(default=0)
     registros_descartados = models.PositiveIntegerField(default=0)
     calidad_kilometraje = models.JSONField(default=dict, blank=True)
+    motivo_cierre = models.CharField(max_length=40, blank=True, default="")
 
     class Meta:
         db_table = "movimientos_envios_especiales"
@@ -264,6 +276,11 @@ class MovimientoEnvioEspecial(ModeloUUIDConMarcasDeTiempo):
                 condition=models.Q(estado=EstadoMovimientoEnvioEspecial.ACTIVO),
                 name="mov_esp_repart_activo_uniq",
             ),
+            models.UniqueConstraint(
+                fields=("solicitud",),
+                condition=models.Q(estado=EstadoMovimientoEnvioEspecial.ACTIVO),
+                name="mov_esp_solic_activo_uniq",
+            ),
             models.CheckConstraint(
                 condition=(
                     models.Q(
@@ -275,8 +292,12 @@ class MovimientoEnvioEspecial(ModeloUUIDConMarcasDeTiempo):
                     | models.Q(
                         estado=EstadoMovimientoEnvioEspecial.FINALIZADO,
                         finalizada_en__isnull=False,
-                        latitud_fin__isnull=False,
-                        longitud_fin__isnull=False,
+                    ) & (
+                        models.Q(latitud_fin__isnull=False, longitud_fin__isnull=False)
+                        | models.Q(
+                            motivo_cierre__in=("SUSPENSION", "FIN_DIA"),
+                            latitud_fin__isnull=True, longitud_fin__isnull=True,
+                        )
                     )
                 ),
                 name="mov_esp_cierre_valido_ck",

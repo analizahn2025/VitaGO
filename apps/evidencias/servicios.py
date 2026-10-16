@@ -1,6 +1,10 @@
 """Casos de uso para registrar evidencias operativas privadas."""
 
 import uuid
+import warnings
+from io import BytesIO
+
+from PIL import Image
 
 from django.conf import settings
 from django.core.files.storage import default_storage
@@ -17,16 +21,9 @@ from apps.usuarios.servicios import usuario_tiene_permiso
 
 
 TIPOS_CONTENIDO_PERMITIDOS = {
-    "image/jpeg": ("jpg", lambda cabecera: cabecera.startswith(b"\xff\xd8\xff")),
-    "image/png": ("png", lambda cabecera: cabecera.startswith(b"\x89PNG\r\n\x1a\n")),
-    "image/webp": (
-        "webp",
-        lambda cabecera: (
-            len(cabecera) >= 12
-            and cabecera[:4] == b"RIFF"
-            and cabecera[8:12] == b"WEBP"
-        ),
-    ),
+    "image/jpeg": ("jpg", "JPEG"),
+    "image/png": ("png", "PNG"),
+    "image/webp": ("webp", "WEBP"),
 }
 
 ESTADOS_POR_TIPO_EVIDENCIA = {
@@ -63,13 +60,35 @@ def validar_archivo_imagen(archivo):
         )
 
     posicion_inicial = archivo.tell()
-    cabecera = archivo.read(16)
-    archivo.seek(posicion_inicial)
-    extension, firma_valida = configuracion_tipo
-    if not firma_valida(cabecera):
+    try:
+        archivo.seek(0)
+        contenido = archivo.read(maximo_bytes + 1)
+    finally:
+        archivo.seek(posicion_inicial)
+    if len(contenido) > maximo_bytes:
+        raise ValidationError({"archivo": "La imagen supera el tamaño máximo permitido."})
+
+    extension, formato_esperado = configuracion_tipo
+    formatos_permitidos = tuple(tipo[1] for tipo in TIPOS_CONTENIDO_PERMITIDOS.values())
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(BytesIO(contenido), formats=formatos_permitidos) as imagen:
+                if imagen.format != formato_esperado:
+                    raise ValidationError({"archivo": "El formato real de la imagen no coincide con su tipo de contenido."})
+                if imagen.width * imagen.height > settings.PIXELES_MAXIMOS_EVIDENCIA:
+                    raise ValidationError({"archivo": "La imagen supera el máximo permitido de píxeles."})
+                if getattr(imagen, "n_frames", 1) != 1:
+                    raise ValidationError({"archivo": "La evidencia debe ser una fotografía estática, no una animación."})
+                imagen.verify()
+            # verify() no decodifica todos los píxeles. Reabrir y cargar para
+            # detectar también archivos truncados; no modificar el original.
+            with Image.open(BytesIO(contenido), formats=formatos_permitidos) as imagen:
+                imagen.load()
+    except (OSError, SyntaxError, ValueError, OverflowError, Image.DecompressionBombError, Image.DecompressionBombWarning) as error:
         raise ValidationError(
-            {"archivo": "El contenido del archivo no coincide con una imagen válida."}
-        )
+            {"archivo": "La imagen está dañada, incompleta o no es una fotografía válida."}
+        ) from error
     return tipo_contenido, extension
 
 
@@ -121,6 +140,8 @@ def registrar_evidencia(usuario, solicitud_id, datos_validados):
                 raise Http404("La solicitud no existe.") from error
 
             repartidor = _validar_repartidor_asignado(usuario, solicitud)
+            from apps.solicitudes.vigencia import exigir_vigencia_solicitud
+            exigir_vigencia_solicitud(solicitud)
             tipo = datos["tipo"]
             if solicitud.estado not in ESTADOS_POR_TIPO_EVIDENCIA[tipo]:
                 raise ValidationError(

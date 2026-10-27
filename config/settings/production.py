@@ -7,6 +7,14 @@ from .base import env
 
 DEBUG = False
 
+# Render termina HTTPS en su proxy; fuera de esa plataforma no se confía
+# en encabezados reenviados ni se autorizan dominios automáticamente.
+if env.bool("RENDER", default=False):
+    dominio_render = env.str("RENDER_EXTERNAL_HOSTNAME", default="").strip()
+    if dominio_render and dominio_render not in ALLOWED_HOSTS:  # noqa: F405
+        ALLOWED_HOSTS.append(dominio_render)  # noqa: F405
+    SECURE_PROXY_SSL_HEADER = ("HTTP_X_FORWARDED_PROTO", "https")
+
 if not SECRET_KEY:  # noqa: F405
     raise ImproperlyConfigured("CLAVE_SECRETA es obligatoria en producción.")
 
@@ -41,10 +49,13 @@ if PROVEEDOR_AUTENTICACION == "JWT_CORPORATIVO":  # noqa: F405
             "AUDIENCIA_JWT_CORPORATIVO es obligatoria en modo corporativo."
         )
 elif PROVEEDOR_AUTENTICACION == "LOCAL":  # noqa: F405
-    if MODO_APLICACION == "CORPORATIVO":  # noqa: F405
+    if (  # noqa: F405
+        MODO_APLICACION == "CORPORATIVO" and ENTORNO != "PRUEBAS"
+    ):
         raise ImproperlyConfigured(
-            "La autenticación local de Corporate solo está permitida "
-            "con la configuración de desarrollo local."
+            "La autenticación local de Corporate en un despliegue en línea "
+            "requiere ENTORNO=PRUEBAS. Para producción definitiva use "
+            "PROVEEDOR_AUTENTICACION=JWT_CORPORATIVO."
         )
     if ALGORITMO_JWT_LOCAL not in {"HS256", "HS384", "HS512"}:  # noqa: F405
         raise ImproperlyConfigured(

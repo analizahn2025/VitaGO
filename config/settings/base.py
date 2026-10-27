@@ -71,6 +71,12 @@ if (
 SECRET_KEY = env.str("CLAVE_SECRETA", default="")
 DEBUG = env.bool("DEPURACION", default=False)
 ALLOWED_HOSTS = env.list("SERVIDORES_PERMITIDOS", default=[])
+# La web usa Bearer JWT; solo los orígenes explícitos pueden leer la API.
+CORS_ALLOWED_ORIGINS = env.list("ORIGENES_WEB_PERMITIDOS", default=[])
+CORS_ALLOW_ALL_ORIGINS = False
+CORS_ALLOW_CREDENTIALS = False
+CORS_URLS_REGEX = r"^/api/v1/"
+CORS_EXPOSE_HEADERS = ["Retry-After", "Server-Timing"]
 DEFAULT_EXCEPTION_REPORTER_FILTER = "apps.nucleo.seguridad.FiltroInformeErroresSeguro"
 DEFAULT_EXCEPTION_REPORTER = "apps.nucleo.seguridad.InformeErroresSeguro"
 
@@ -93,6 +99,7 @@ INSTALLED_APPS = [
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "corsheaders",
     "rest_framework",
     "apps.nucleo.apps.ConfiguracionNucleo",
     "apps.geografia.apps.ConfiguracionGeografia",
@@ -113,6 +120,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "apps.nucleo.middleware.MiddlewareRendimientoAPI",
+    "corsheaders.middleware.CorsMiddleware",
     "apps.nucleo.seguridad.MiddlewareErroresSegurosAPI",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",

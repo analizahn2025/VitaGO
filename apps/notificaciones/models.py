@@ -24,6 +24,7 @@ class NotificacionUsuario(ModeloUUIDConMarcasDeTiempo):
     titulo = models.CharField(max_length=160)
     mensaje = models.TextField()
     leida_en = models.DateTimeField(null=True, blank=True)
+    archivada_en = models.DateTimeField(null=True, blank=True)
 
     class Meta:
         db_table = "notificaciones_usuario"
@@ -32,6 +33,11 @@ class NotificacionUsuario(ModeloUUIDConMarcasDeTiempo):
             models.Index(
                 fields=("usuario", "leida_en", "-creado_en"),
                 name="notif_usuario_lectura_idx",
+            ),
+            models.Index(
+                fields=("creado_en",),
+                condition=models.Q(archivada_en__isnull=True),
+                name="notif_pend_archivo_fecha_idx",
             ),
         ]
         constraints = [

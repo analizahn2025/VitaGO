@@ -43,6 +43,7 @@ ESTADOS_SOLICITUD_ACTIVOS = (
 
 
 class TipoEventoSolicitud(models.TextChoices):
+    CARGA_ACTUALIZADA = "CARGA_ACTUALIZADA", "Cantidad de tubos actualizada"
     REASIGNACION_PENDIENTE = "REASIGNACION_PENDIENTE", "Reasignación pendiente"
     CIERRE_AUTOMATICO = "CIERRE_AUTOMATICO", "Cierre automático"
     CREADA = "CREADA", "Creada"

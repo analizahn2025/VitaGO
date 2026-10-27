@@ -1,5 +1,7 @@
 """Serializadores HTTP del dominio de solicitudes."""
 
+import re
+from datetime import date
 from decimal import Decimal
 
 from rest_framework import serializers
@@ -170,6 +172,7 @@ class SerializadorSolicitudResumen(serializers.ModelSerializer):
         fields = (
             "id",
             "numero",
+            "cantidad_tubos",
             "empresa_id",
             "sucursal_id",
             "sucursal",
@@ -190,6 +193,11 @@ class SerializadorSolicitudResumen(serializers.ModelSerializer):
             "motivo_cierre",
             "creado_en",
         )
+
+
+class SerializadorEntregaResumenDiario(SerializadorSolicitudResumen):
+    class Meta(SerializadorSolicitudResumen.Meta):
+        fields = SerializadorSolicitudResumen.Meta.fields + ("entregada_en",)
 
 
 class SerializadorSolicitudDetalle(SerializadorSolicitudResumen):
@@ -257,6 +265,7 @@ class SerializadorArticuloCreacion(serializers.Serializer):
 
 
 class SerializadorCreacionSolicitud(serializers.Serializer):
+    cantidad_tubos = serializers.IntegerField(min_value=1, max_value=2147483647)
     empresa_id = serializers.UUIDField()
     sucursal_id = serializers.UUIDField(required=False, allow_null=True)
     prioridad = serializers.ChoiceField(choices=PrioridadSolicitud.choices)
@@ -279,6 +288,11 @@ class SerializadorCreacionSolicitud(serializers.Serializer):
         allow_null=True,
     )
     articulos = SerializadorArticuloCreacion(many=True, allow_empty=False)
+
+
+class SerializadorActualizacionTubos(serializers.Serializer):
+    cantidad_tubos = serializers.IntegerField(min_value=1, max_value=2147483647)
+    motivo = serializers.CharField(max_length=1000, allow_blank=False)
 
 
 class SerializadorConsultaSolicitudes(serializers.Serializer):
@@ -325,6 +339,27 @@ class SerializadorConsultaOpcionesCreacion(serializers.Serializer):
 class SerializadorConsultaResumenSolicitante(serializers.Serializer):
     empresa_id = serializers.UUIDField(required=False)
     sucursal_id = serializers.UUIDField(required=False)
+    fecha_operativa = serializers.DateField(
+        required=False,
+        input_formats=("%Y-%m-%d",),
+    )
+
+    def validate(self, atributos):
+        texto = self.initial_data.get("fecha_operativa")
+        if isinstance(texto, str) and not re.fullmatch(
+            r"[0-9]{4}-[0-9]{2}-[0-9]{2}", texto
+        ):
+            raise serializers.ValidationError(
+                {"fecha_operativa": "Use el formato AAAA-MM-DD."}
+            )
+        return atributos
+
+    def validate_fecha_operativa(self, valor):
+        if valor == date.max:
+            raise serializers.ValidationError(
+                "La fecha debe permitir calcular el inicio del día siguiente."
+            )
+        return valor
 
 
 class SerializadorAsignacionManualSolicitud(serializers.Serializer):

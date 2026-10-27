@@ -66,7 +66,7 @@ class SerializadorCreacionIncidencia(serializers.Serializer):
         required=False,
         allow_null=True,
     )
-    reportada_en = serializers.DateTimeField()
+    reportada_en = serializers.DateTimeField(read_only=True)
 
     def validate(self, atributos):
         tiene_latitud = atributos.get("latitud") is not None
@@ -139,7 +139,7 @@ class SerializadorRegistroEvidenciaIncidencia(serializers.Serializer):
         min_value=-180,
         max_value=180,
     )
-    capturada_en = serializers.DateTimeField()
+    capturada_en = serializers.DateTimeField(read_only=True)
     notas = serializers.CharField(
         required=False,
         allow_blank=True,

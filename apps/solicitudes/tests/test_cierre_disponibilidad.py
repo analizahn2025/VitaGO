@@ -36,6 +36,7 @@ class PruebasDisponibilidadTrasCierre(TestCase):
             self.solicitud.save()
             if con_otra:
                 otra = Solicitud.objects.create(
+                    cantidad_tubos=1,
                     numero="OTRA-ACTIVA", empresa=self.empresa,
                     solicitada_por=self.solicitante, repartidor_asignado=self.repartidor,
                     prioridad="NORMAL", tipo_servicio=self.tipo_servicio,
@@ -45,19 +46,21 @@ class PruebasDisponibilidadTrasCierre(TestCase):
                     solicitud=otra, repartidor=self.repartidor,
                     asignada_por=self.administrador,
                 )
+            if self.repartidor.estado_operativo != estado_operativo:
+                actualizar_operacion_repartidor(self.usuario_repartidor, self.repartidor.pk, {
+                    "estado_operativo": estado_operativo, "motivo": "Prueba de disponibilidad",
+                })
             if destino == EstadoSolicitud.ENTREGADA:
                 registrar_evidencia(self.usuario_repartidor, self.solicitud.pk, {
                     "tipo": "FOTO_ENTREGA", "archivo": crear_imagen_prueba(),
                     "latitud": self.origen.latitud, "longitud": self.origen.longitud,
                     "capturada_en": timezone.now(),
                 })
-            actualizar_operacion_repartidor(self.usuario_repartidor, self.repartidor.pk, {
-                "estado_operativo": estado_operativo, "motivo": "Prueba de disponibilidad",
-            })
-            cambiar_estado_solicitud(
-                self.administrador if destino == EstadoSolicitud.CANCELADA else self.usuario_repartidor,
-                self.solicitud.pk, {"estado_destino": destino, "motivo": "Cierre de prueba"},
-            )
+            else:
+                cambiar_estado_solicitud(
+                    self.administrador if destino == EstadoSolicitud.CANCELADA else self.usuario_repartidor,
+                    self.solicitud.pk, {"estado_destino": destino, "motivo": "Cierre de prueba"},
+                )
             self.repartidor.refresh_from_db()
             bloqueado = estado_operativo in ("PAUSED", "OFFLINE", "OUT_OF_SERVICE")
             esperado = estado_operativo if bloqueado else "ON_ROUTE" if con_otra else "AVAILABLE"

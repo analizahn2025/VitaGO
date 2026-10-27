@@ -22,3 +22,11 @@ class LimiteSolicitudesRepartidor(APIException):
                 ]
             }
         )
+
+
+class CupoTubosInsuficiente(APIException):
+    status_code = 409
+    default_code = "cupo_tubos_insuficiente"
+
+    def __init__(self, mensaje):
+        super().__init__({"repartidor_id": [mensaje]})

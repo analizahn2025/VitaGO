@@ -1,6 +1,6 @@
 from unittest.mock import patch
 
-from django.test import SimpleTestCase
+from django.test import TestCase
 
 from apps.autenticacion.servicios.credenciales import (
     autenticar_usuario_local,
@@ -8,7 +8,7 @@ from apps.autenticacion.servicios.credenciales import (
 from apps.usuarios.models import Usuario
 
 
-class PruebasCredencialesLocales(SimpleTestCase):
+class PruebasCredencialesLocales(TestCase):
     def test_busca_correo_normalizado_mediante_indice_exacto(self):
         usuario = Usuario(
             correo="usuario@example.com",

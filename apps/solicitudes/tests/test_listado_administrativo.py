@@ -123,6 +123,7 @@ class PruebasListadoAdministrativoSolicitudes(TestCase):
     @classmethod
     def _solicitud(cls, numero, solicitante, sucursal):
         return Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=numero,
             empresa=sucursal.empresa,
             sucursal=sucursal,
@@ -252,6 +253,7 @@ class PruebasListadoAdministrativoSolicitudes(TestCase):
 
     def test_grupo_sin_sucursal_tiene_filtro_propio(self):
         Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-ADMIN-SIN-SUCURSAL",
             empresa=self.empresa_a,
             solicitada_por=self.solicitante_a,

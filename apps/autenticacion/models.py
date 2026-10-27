@@ -1,4 +1,4 @@
-"""Persistencia de sesiones revocables para VitaGo Network."""
+"""Sesiones revocables y controles de acceso del proveedor local."""
 
 from django.core.exceptions import ValidationError
 from django.db import models
@@ -6,6 +6,23 @@ from django.utils import timezone
 
 from apps.autenticacion.opciones import MotivoRevocacionSesion
 from apps.nucleo.models import ModeloUUIDConMarcasDeTiempo
+
+
+class ControlIntentosInicioSesion(ModeloUUIDConMarcasDeTiempo):
+    huella = models.CharField(max_length=64, unique=True)
+    intentos_fallidos = models.PositiveSmallIntegerField(default=0)
+    ventana_iniciada_en = models.DateTimeField()
+
+    class Meta:
+        db_table = "controles_intentos_inicio_sesion"
+        verbose_name = "control de intentos de inicio de sesión"
+        verbose_name_plural = "controles de intentos de inicio de sesión"
+        constraints = [
+            models.CheckConstraint(
+                condition=models.Q(intentos_fallidos__gte=0, intentos_fallidos__lte=10),
+                name="intentos_inicio_rango_ck",
+            ),
+        ]
 
 
 class SesionAutenticacion(ModeloUUIDConMarcasDeTiempo):

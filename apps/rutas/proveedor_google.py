@@ -15,7 +15,10 @@ from django.conf import settings
 
 
 URL_COMPUTE_ROUTES = "https://routes.googleapis.com/directions/v2:computeRoutes"
-MASCARA_CAMPOS = "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline"
+MASCARA_CAMPOS = (
+    "routes.distanceMeters,routes.duration,routes.polyline.encodedPolyline,"
+    "routes.legs.polyline.encodedPolyline"
+)
 AVISO_MOTOCICLETA = (
     "Las rutas para motocicletas están en beta y pueden omitir aceras, senderos "
     "peatonales o ciclovías. Verifica que la vía sea apta y respeta las señales."
@@ -98,6 +101,28 @@ def calcular_ruta_google(origen, paradas):
             raise ValueError()
         if any(not 63 <= ord(caracter) <= 126 for caracter in polilinea):
             raise ValueError()
+        # Cada parada no-via produce un leg, en el orden solicitado; no se
+        # recorta por cercanía una polilínea global (puede cruzarse a sí misma).
+        # https://developers.google.com/maps/documentation/routes/traffic_on_polylines?utm_campaign=gmp_git_agentskills_v1
+        tramos = ruta["legs"]
+        if not isinstance(tramos, list) or len(tramos) != len(destinos):
+            raise ValueError()
+        polilineas = []
+        anterior = cuerpo["origin"]
+        for tramo, destino in zip(tramos, destinos):
+            codificada = tramo.get("polyline", {}).get("encodedPolyline", "")
+            mismo_punto = anterior == destino
+            if (
+                not isinstance(codificada, str) or len(codificada) > 200000
+                or (not codificada and not mismo_punto)
+                or any(not 63 <= ord(caracter) <= 126 for caracter in codificada)
+            ):
+                raise ValueError()
+            polilineas.append(codificada)
+            anterior = destino
     except (ValueError, TypeError, KeyError, IndexError, AttributeError, UnicodeDecodeError):
         raise ErrorProveedorGoogle("RESPUESTA_INVALIDA") from None
-    return {"distancia_estimada_metros": distancia, "duracion_estimada_segundos": duracion, "polilinea_codificada": polilinea}
+    return {
+        "distancia_estimada_metros": distancia, "duracion_estimada_segundos": duracion,
+        "polilinea_codificada": polilinea, "polilineas_tramos": polilineas,
+    }

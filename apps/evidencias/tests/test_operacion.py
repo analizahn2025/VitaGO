@@ -1,5 +1,9 @@
 import tempfile
+from contextlib import nullcontext
+from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
+from uuid import uuid4
 
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase, override_settings
@@ -14,6 +18,7 @@ from apps.evidencias.servicios import registrar_evidencia
 from apps.flota.models import Vehiculo
 from apps.geografia.models import Pais
 from apps.jornadas.models import JornadaRepartidor
+from apps.jornadas.servicios import finalizar_jornada
 from apps.nucleo.tests.imagenes import crear_imagen_prueba
 from apps.organizaciones.models import Empresa
 from apps.repartidores.models import Repartidor
@@ -21,6 +26,7 @@ from apps.repartidores.opciones import (
     CapacidadRepartidor,
     EstadoOperativoRepartidor,
 )
+from apps.seguimiento.models import RegistroUbicacion
 from apps.solicitudes.models import (
     AsignacionSolicitud,
     EventoSolicitud,
@@ -132,6 +138,7 @@ class PruebasOperacionConEvidencias(TestCase):
     def setUp(self):
         self.jornada = JornadaRepartidor.objects.create(repartidor=self.repartidor)
         self.solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=f"SOL-EVIDENCIA-{Solicitud.objects.count() + 1}",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -158,6 +165,7 @@ class PruebasOperacionConEvidencias(TestCase):
             self.solicitud.id,
             {
                 "tipo": tipo,
+                **({"temperatura_contenedor_c": "4.50"} if tipo == "FOTO_RECOLECCION" else {}),
                 "archivo": self._archivo_png(),
                 "latitud": Decimal("14.072300"),
                 "longitud": Decimal("-87.192100"),
@@ -167,6 +175,78 @@ class PruebasOperacionConEvidencias(TestCase):
         )
 
     def _transicion(self, estado_destino):
+        if estado_destino in (
+            EstadoSolicitud.EN_RECOLECCION,
+            EstadoSolicitud.EN_DESTINO,
+        ):
+            from apps.seguimiento.llegadas import detectar_llegada
+
+            ahora = timezone.now()
+            inicio_desplazamiento = ahora - timedelta(seconds=40)
+            # Este helper comprime el viaje de la prueba; las capturas deben
+            # suceder después del inicio real de la etapa y de su asignación.
+            JornadaRepartidor.objects.filter(pk=self.jornada.pk).update(
+                iniciada_en=inicio_desplazamiento - timedelta(seconds=1)
+            )
+            AsignacionSolicitud.objects.filter(
+                solicitud=self.solicitud,
+                repartidor=self.repartidor,
+                estado=EstadoAsignacionSolicitud.ACTIVA,
+            ).update(
+                asignada_en=inicio_desplazamiento,
+                aceptada_en=inicio_desplazamiento,
+            )
+            Solicitud.objects.filter(pk=self.solicitud.pk).update(
+                asignada_en=inicio_desplazamiento
+            )
+            tipo_inicio = (
+                TipoEventoSolicitud.HACIA_RECOLECCION
+                if estado_destino == EstadoSolicitud.EN_RECOLECCION
+                else TipoEventoSolicitud.EN_TRANSITO
+            )
+            EventoSolicitud.objects.filter(
+                solicitud=self.solicitud,
+                repartidor=self.repartidor,
+                tipo=tipo_inicio,
+            ).update(creado_en=inicio_desplazamiento)
+            # La primera parada ya atendida no debe mezclarse con las tres
+            # capturas consecutivas de la siguiente etapa de esta misma prueba.
+            RegistroUbicacion.objects.filter(jornada=self.jornada).update(
+                registrada_en=inicio_desplazamiento,
+                creado_en=inicio_desplazamiento,
+            )
+            ubicacion = (
+                self.origen
+                if estado_destino == EstadoSolicitud.EN_RECOLECCION
+                else self.destino
+            )
+            sesion_gps = uuid4()
+            for secuencia, retraso in enumerate((20, 10, 0), start=1):
+                capturada_en = ahora - timedelta(seconds=retraso)
+                registro = RegistroUbicacion.objects.create(
+                    id_cliente=uuid4(),
+                    sesion_gps=sesion_gps,
+                    secuencia=secuencia,
+                    repartidor=self.repartidor,
+                    jornada=self.jornada,
+                    latitud=ubicacion.latitud,
+                    longitud=ubicacion.longitud,
+                    precision_metros=Decimal("5"),
+                    velocidad_metros_segundo=Decimal("0"),
+                    registrada_en=capturada_en,
+                    es_operativo=True,
+                )
+                RegistroUbicacion.objects.filter(pk=registro.pk).update(
+                    creado_en=capturada_en
+                )
+            llegada = detectar_llegada(
+                self.usuario_repartidor, self.repartidor.pk, self.jornada.pk
+            )
+            self.assertIsNotNone(llegada)
+            self.solicitud.refresh_from_db()
+            self.assertEqual(self.solicitud.estado, estado_destino)
+            return self.solicitud
+
         solicitud = cambiar_estado_solicitud(
             self.usuario_repartidor,
             self.solicitud.id,
@@ -183,6 +263,60 @@ class PruebasOperacionConEvidencias(TestCase):
         with self.assertRaises(ValidationError):
             self._registrar(TipoEvidenciaSolicitud.FOTO_RECOLECCION)
 
+    def test_api_fecha_oficial_ignora_reloj_del_telefono_y_admite_omitir_fecha(self):
+        self.solicitud.estado = EstadoSolicitud.EN_RECOLECCION
+        self.solicitud.save()
+        ahora = timezone.now()
+        cliente = APIClient()
+        cliente.force_authenticate(self.usuario_repartidor)
+        for fecha in (None, "fecha-manipulada", (ahora - timedelta(days=3650)).isoformat(),
+                      (ahora + timedelta(days=3650)).isoformat()):
+            # Cada caso simula una etapa aún pendiente de su foto.
+            Solicitud.objects.filter(pk=self.solicitud.pk).update(estado=EstadoSolicitud.EN_RECOLECCION)
+            datos = {"temperatura_contenedor_c": "4.50", "tipo": "FOTO_RECOLECCION", "archivo": self._archivo_png(),
+                     "latitud": "14.072300", "longitud": "-87.192100"}
+            if fecha is not None:
+                datos["capturada_en"] = fecha
+            with self.subTest(fecha=fecha), patch("apps.evidencias.servicios.timezone.now", return_value=ahora):
+                respuesta = cliente.post(
+                    reverse("solicitudes:evidencias:lista-registro", args=[self.solicitud.pk]),
+                    datos, format="multipart",
+                )
+                self.assertEqual(respuesta.status_code, 201, respuesta.data)
+                evidencia = EvidenciaSolicitud.objects.get(pk=respuesta.data["id"])
+                self.assertEqual(evidencia.capturada_en, ahora)
+                evento = EventoSolicitud.objects.get(metadatos__evidencia_id=str(evidencia.pk))
+                self.assertEqual(evento.metadatos["capturada_en"], ahora.isoformat())
+
+    def test_servicio_tampoco_confia_en_fecha_recibida_sin_serializador(self):
+        self.solicitud.estado = EstadoSolicitud.EN_RECOLECCION
+        self.solicitud.save()
+        ahora = timezone.now()
+        with patch("apps.evidencias.servicios.timezone.now", return_value=ahora):
+            evidencia = registrar_evidencia(self.usuario_repartidor, self.solicitud.pk, {
+                "temperatura_contenedor_c": "4.50", "tipo": "FOTO_RECOLECCION", "archivo": self._archivo_png(),
+                "latitud": self.origen.latitud, "longitud": self.origen.longitud,
+                "capturada_en": ahora + timedelta(days=3650),
+            })
+        self.assertEqual(evidencia.capturada_en, ahora)
+
+    def test_compensacion_preserva_error_original_y_revierte_filas(self):
+        self.solicitud.estado = EstadoSolicitud.EN_RECOLECCION
+        self.solicitud.save()
+        for fallo_limpieza in (None, OSError("Almacenamiento no disponible")):
+            original = RuntimeError("Fallo de auditoría")
+            with self.subTest(limpieza_falla=bool(fallo_limpieza)), \
+                 patch("apps.evidencias.servicios.default_storage.save", return_value="evidencias/nueva.png"), \
+                 patch("apps.evidencias.servicios.default_storage.delete", side_effect=fallo_limpieza) as eliminar, \
+                 patch("apps.evidencias.servicios.EventoSolicitud.objects.create", side_effect=original), \
+                 (self.assertLogs("vitago.api", level="ERROR") if fallo_limpieza else nullcontext()):
+                with self.assertRaises(RuntimeError) as error:
+                    self._registrar(TipoEvidenciaSolicitud.FOTO_RECOLECCION)
+                self.assertIs(error.exception, original)
+                eliminar.assert_called_once_with("evidencias/nueva.png")
+            self.assertFalse(EvidenciaSolicitud.objects.exists())
+            self.assertFalse(EventoSolicitud.objects.exists())
+
         self.assertFalse(EvidenciaSolicitud.objects.exists())
 
     def test_solo_motorista_asignado_puede_registrar_evidencia(self):
@@ -194,7 +328,7 @@ class PruebasOperacionConEvidencias(TestCase):
                 self.administrador,
                 self.solicitud.id,
                 {
-                    "tipo": TipoEvidenciaSolicitud.FOTO_RECOLECCION,
+                    "temperatura_contenedor_c": "4.50", "tipo": TipoEvidenciaSolicitud.FOTO_RECOLECCION,
                     "archivo": self._archivo_png(),
                     "latitud": Decimal("14.072300"),
                     "longitud": Decimal("-87.192100"),
@@ -219,7 +353,7 @@ class PruebasOperacionConEvidencias(TestCase):
         cliente.force_authenticate(self.usuario_repartidor)
         respuesta = cliente.post(
             reverse("solicitudes:evidencias:lista-registro", kwargs={"solicitud_id": self.solicitud.id}),
-            {"tipo": TipoEvidenciaSolicitud.FOTO_RECOLECCION,
+            {"temperatura_contenedor_c": "4.50", "tipo": TipoEvidenciaSolicitud.FOTO_RECOLECCION,
              "archivo": SimpleUploadedFile("corrupta.png", b"\x89PNG\r\n\x1a\n" + b"\x00" * 32, content_type="image/png"),
              "latitud": "14.072300", "longitud": "-87.192100", "capturada_en": timezone.now().isoformat()},
             format="multipart",
@@ -283,7 +417,7 @@ class PruebasOperacionConEvidencias(TestCase):
                 kwargs={"solicitud_id": self.solicitud.id},
             ),
             {
-                "tipo": TipoEvidenciaSolicitud.FOTO_RECOLECCION,
+                "temperatura_contenedor_c": "4.50", "tipo": TipoEvidenciaSolicitud.FOTO_RECOLECCION,
                 "archivo": self._archivo_png(),
                 "latitud": "14.072300",
                 "longitud": "-87.192100",
@@ -306,7 +440,11 @@ class PruebasOperacionConEvidencias(TestCase):
         self.assertEqual(respuesta_archivo.status_code, 200)
         self.assertEqual(respuesta_archivo["Content-Type"], "image/png")
         self.assertEqual(respuesta_archivo["Cache-Control"], "private, no-store")
-        respuesta_archivo.close()
+        # Consumir el stream usa el cierre protegido del cliente de Django;
+        # close() directo cierra la conexión PostgreSQL del TestCase.
+        contenido = b"".join(respuesta_archivo.streaming_content)
+        self.assertTrue(contenido.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertTrue(respuesta_archivo.closed)
 
     def test_entrega_exige_evidencia(self):
         self.solicitud.estado = EstadoSolicitud.EN_DESTINO
@@ -328,13 +466,12 @@ class PruebasOperacionConEvidencias(TestCase):
         evidencia_recoleccion = self._registrar(
             TipoEvidenciaSolicitud.FOTO_RECOLECCION
         )
-        self._transicion(EstadoSolicitud.RECOLECTADA)
-        self._transicion(EstadoSolicitud.EN_TRANSITO)
+        self.solicitud.refresh_from_db()
+        self.assertEqual(self.solicitud.estado, EstadoSolicitud.EN_TRANSITO)
         self._transicion(EstadoSolicitud.EN_DESTINO)
         evidencia_entrega = self._registrar(
             TipoEvidenciaSolicitud.FOTO_ENTREGA
         )
-        self._transicion(EstadoSolicitud.ENTREGADA)
 
         self.solicitud.refresh_from_db()
         self.repartidor.refresh_from_db()
@@ -364,6 +501,13 @@ class PruebasOperacionConEvidencias(TestCase):
             archivo_existe_en_almacenamiento(
                 evidencia_entrega.clave_almacenamiento
             )
+        )
+        self.assertEqual(asignacion.finalizada_en, self.solicitud.entregada_en)
+        jornada = finalizar_jornada(self.usuario_repartidor, self.jornada.pk, {})
+        self.assertEqual(
+            (jornada.servicios_completados, jornada.entregas_completadas,
+             jornada.recolecciones_completadas, jornada.servicios_normales),
+            (1, 1, 1, 1),
         )
 
 

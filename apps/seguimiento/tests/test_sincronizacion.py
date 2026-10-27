@@ -53,7 +53,7 @@ class PruebasSincronizacionGPS(PruebasSeguimiento):
         with patch.object(Solicitud.objects, "select_for_update", wraps=Solicitud.objects.select_for_update) as bloquear:
             respuesta = cliente.post(url, {"sesiones_gps": []}, format="json")
         self.assertEqual(respuesta.status_code, 200)
-        bloquear.assert_called_once_with(of=("self",))
+        bloquear.assert_called_once_with(of=("self",), no_key=True)
         movimiento.refresh_from_db()
         self.assertTrue(movimiento.calidad_kilometraje["sincronizacion_verificada"])
         cantidad = RevisionKilometraje.objects.filter(movimiento_especial=movimiento).count()
@@ -242,8 +242,12 @@ class PruebasSincronizacionGPS(PruebasSeguimiento):
         url = reverse("seguimiento:configuracion")
         self.assertEqual(cliente.get(url).status_code, 401)
         cliente.force_authenticate(self.usuario_repartidor)
-        respuesta = cliente.get(url)
+        ahora = timezone.now()
+        with patch("apps.seguimiento.selectores.timezone.now", return_value=ahora):
+            respuesta = cliente.get(url, {"hora_servidor": "2000-01-01T00:00:00Z"})
         self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.data["hora_servidor"], ahora.isoformat())
+        self.assertEqual(respuesta.data["zona_horaria_operativa"], "America/Tegucigalpa")
         self.assertTrue(respuesta.data["asignacion_requiere_gps_vigente"])
         cliente.force_authenticate(self.solicitante)
         self.assertEqual(cliente.get(url).status_code, 404)
@@ -265,6 +269,7 @@ class PruebasSincronizacionGPS(PruebasSeguimiento):
 
         antes = medir_jornada(self.jornada, timezone.now())
         otra = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-SUPERPUESTA", empresa=self.empresa, solicitada_por=self.solicitante,
             repartidor_asignado=self.repartidor, prioridad="NORMAL", tipo_servicio=self.tipo_servicio,
             origen=self.origen, destino=self.destino, estado=EstadoSolicitud.ENTREGADA,
@@ -322,6 +327,7 @@ class PruebasSincronizacionGPS(PruebasSeguimiento):
 
     def test_prioritario_recogido_bloquea_operacion_de_otra_solicitud(self):
         Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="PRIORIDAD-EXCLUSIVA", empresa=self.empresa, solicitada_por=self.solicitante,
             repartidor_asignado=self.repartidor, prioridad="PRIORITY", tipo_servicio=self.tipo_servicio,
             origen=self.origen, destino=self.destino, estado=EstadoSolicitud.RECOLECTADA,

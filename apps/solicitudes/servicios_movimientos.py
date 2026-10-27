@@ -171,7 +171,7 @@ def confirmar_sincronizacion_movimiento(usuario, solicitud_id, datos):
 
     try:
         solicitud = (
-            Solicitud.objects.select_for_update(of=("self",))
+            Solicitud.objects.select_for_update(of=("self",), no_key=True)
             .select_related("empresa", "sucursal")
             .get(pk=solicitud_id)
         )

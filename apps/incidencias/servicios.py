@@ -3,13 +3,14 @@
 import uuid
 
 from django.core.files.storage import default_storage
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from apps.evidencias.servicios import validar_archivo_imagen
+from apps.evidencias.servicios import limpiar_archivo_nuevo, validar_archivo_imagen
 from apps.incidencias.models import (
     EventoIncidencia,
     EvidenciaIncidencia,
@@ -107,8 +108,13 @@ def crear_incidencia(usuario, datos_validados):
             'No tiene el permiso requerido: "incidencia.crear".'
         )
     jornada = _obtener_jornada_activa_bloqueada(repartidor)
-    reportada_en = datos_validados["reportada_en"]
-    if not jornada.iniciada_en <= reportada_en <= timezone.now():
+    reportada_en = timezone.now()
+    vencida = False
+    if settings.MODO_APLICACION == "CORPORATIVO" and repartidor.empresa_id:
+        from apps.solicitudes.vigencia import limite_dia_operativo
+
+        vencida = reportada_en >= limite_dia_operativo(jornada.iniciada_en, repartidor.empresa)
+    if reportada_en < jornada.iniciada_en or vencida:
         raise ValidationError(
             {
                 "reportada_en": (
@@ -215,18 +221,6 @@ def _validar_propiedad_evidencia(usuario, incidencia):
         )
 
 
-def _validar_fecha_evidencia(incidencia, capturada_en):
-    limite_superior = incidencia.jornada.finalizada_en or timezone.now()
-    if not incidencia.jornada.iniciada_en <= capturada_en <= limite_superior:
-        raise ValidationError(
-            {
-                "capturada_en": (
-                    "Debe pertenecer al intervalo de la jornada de la incidencia."
-                )
-            }
-        )
-
-
 def registrar_evidencia_incidencia(usuario, incidencia_id, datos_validados):
     datos = dict(datos_validados)
     archivo = datos.pop("archivo")
@@ -246,7 +240,7 @@ def registrar_evidencia_incidencia(usuario, incidencia_id, datos_validados):
                 .get(id=autorizada.id)
             )
             _validar_propiedad_evidencia(usuario, incidencia)
-            _validar_fecha_evidencia(incidencia, datos["capturada_en"])
+            datos["capturada_en"] = timezone.now()
 
             clave_propuesta = (
                 f"incidencias/{incidencia.id}/{uuid.uuid4().hex}.{extension}"
@@ -272,7 +266,6 @@ def registrar_evidencia_incidencia(usuario, incidencia_id, datos_validados):
             )
             return evidencia
     except Exception:
-        if clave_guardada and default_storage.exists(clave_guardada):
-            default_storage.delete(clave_guardada)
+        limpiar_archivo_nuevo(clave_guardada)
         raise
 

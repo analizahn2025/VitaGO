@@ -3,13 +3,15 @@
 import ipaddress
 
 from django.conf import settings
+from django.db import transaction
+from django.utils.decorators import method_decorator
 from rest_framework.exceptions import AuthenticationFailed, NotFound
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
-from rest_framework.status import HTTP_200_OK, HTTP_204_NO_CONTENT
+from rest_framework.status import HTTP_200_OK, HTTP_204_NO_CONTENT, HTTP_429_TOO_MANY_REQUESTS
 from rest_framework.views import APIView
 
-from apps.autenticacion.excepciones import ErrorAutenticacion
+from apps.autenticacion.excepciones import ErrorAutenticacion, LimiteIntentosInicioSesion
 from apps.autenticacion.serializadores import (
     SerializadorInicioSesion,
     SerializadorRenovacionToken,
@@ -85,6 +87,7 @@ class VistaAutenticacionPublica(APIView):
         return "Bearer"
 
 
+@method_decorator(transaction.non_atomic_requests, name="dispatch")
 class VistaInicioSesion(VistaAutenticacionPublica):
     def post(self, request):
         _exigir_proveedor_local()
@@ -95,10 +98,17 @@ class VistaInicioSesion(VistaAutenticacionPublica):
             usuario = autenticar_usuario_local(
                 serializador.validated_data["correo"],
                 serializador.validated_data["contrasena"],
+                direccion_ip=_obtener_direccion_ip(request),
             )
             resultado = crear_sesion(
                 usuario,
                 _crear_metadatos(request),
+            )
+        except LimiteIntentosInicioSesion as error:
+            return Response(
+                {"detail": str(error), "segundos_espera": error.segundos_espera},
+                status=HTTP_429_TOO_MANY_REQUESTS,
+                headers={"Retry-After": str(error.segundos_espera)},
             )
         except ErrorAutenticacion as error:
             _elevar_error_autenticacion(error)

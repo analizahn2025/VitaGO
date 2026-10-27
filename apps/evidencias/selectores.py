@@ -26,6 +26,7 @@ def listar_evidencias_autorizadas(usuario, solicitud_id):
         solicitud_id,
     )
     return EvidenciaSolicitud.objects.filter(solicitud=solicitud).select_related(
+        "solicitud",
         "repartidor",
         "repartidor__usuario",
     )

@@ -14,6 +14,14 @@ class CredencialesInvalidas(ErrorAutenticacion):
         super().__init__("Credenciales inválidas.")
 
 
+class LimiteIntentosInicioSesion(ErrorAutenticacion):
+    codigo = "limite_intentos_inicio_sesion"
+
+    def __init__(self, segundos_espera):
+        self.segundos_espera = segundos_espera
+        super().__init__("Se alcanzó el límite de intentos de inicio de sesión. Intente más tarde.")
+
+
 class TokenRefrescoInvalido(ErrorAutenticacion):
     codigo = "token_refresco_invalido"
 

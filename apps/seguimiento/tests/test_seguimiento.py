@@ -123,6 +123,7 @@ class PruebasSeguimiento(TestCase):
             iniciada_en=self.ahora - timedelta(minutes=15),
         )
         self.solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=f"SOL-GPS-{uuid.uuid4().hex[:8]}",
             empresa=self.empresa,
             solicitada_por=self.solicitante,

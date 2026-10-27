@@ -29,6 +29,7 @@ class PruebasAPISolicitudes(SimpleTestCase):
 
     def _datos_creacion(self, **cambios):
         datos = {
+            "cantidad_tubos": 1,
             "empresa_id": str(uuid.uuid4()),
             "prioridad": "NORMAL",
             "tipo_servicio_id": str(uuid.uuid4()),

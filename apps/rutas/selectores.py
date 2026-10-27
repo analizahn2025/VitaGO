@@ -6,13 +6,14 @@ from rest_framework.exceptions import PermissionDenied
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.opciones import EstadoJornada
 from apps.repartidores.models import Repartidor
+from apps.rutas.models import ParadaVersionRuta, RutaRepartidor, VersionRuta
+from apps.rutas.ordenamiento import ordenar_paradas
 from apps.solicitudes.models import Solicitud
 from apps.solicitudes.opciones import (
     ESTADOS_SOLICITUD_ACTIVOS,
     EstadoAsignacionSolicitud,
     EstadoSolicitud,
     ModalidadSolicitud,
-    PrioridadSolicitud,
 )
 from apps.usuarios.servicios import usuario_tiene_permiso
 
@@ -21,11 +22,6 @@ ESTADOS_ANTES_RECOLECCION = {
     EstadoSolicitud.ASIGNADA,
     EstadoSolicitud.HACIA_RECOLECCION,
     EstadoSolicitud.EN_RECOLECCION,
-}
-ESTADOS_DESPUES_RECOLECCION = {
-    EstadoSolicitud.RECOLECTADA,
-    EstadoSolicitud.EN_TRANSITO,
-    EstadoSolicitud.EN_DESTINO,
 }
 
 
@@ -55,6 +51,7 @@ def _crear_parada(solicitud, tipo, ubicacion=None):
     return {
         "solicitud_id": solicitud.id,
         "numero_solicitud": solicitud.numero,
+        "cantidad_tubos": solicitud.cantidad_tubos,
         "prioridad": solicitud.prioridad,
         "modalidad": solicitud.modalidad,
         "estado_solicitud": solicitud.estado,
@@ -78,9 +75,8 @@ def _paradas_de_solicitud(solicitud):
     return paradas
 
 
-def obtener_paradas_operativas(repartidor):
-    """Orden provisional compartido por la API y las versiones persistidas."""
-    solicitudes = list(
+def obtener_solicitudes_operativas(repartidor):
+    return list(
         Solicitud.objects.filter(
             repartidor_asignado=repartidor,
             estado__in=ESTADOS_SOLICITUD_ACTIVOS,
@@ -90,42 +86,36 @@ def obtener_paradas_operativas(repartidor):
         .select_related("origen", "destino")
         .distinct()
     )
-    solicitudes.sort(
-        key=lambda solicitud: (
-            solicitud.asignada_en or solicitud.creado_en,
-            str(solicitud.id),
-        )
-    )
-    exclusivas_recogidas = [
-        solicitud
-        for solicitud in solicitudes
-        if solicitud.estado in ESTADOS_DESPUES_RECOLECCION
-        and (
-            solicitud.prioridad == PrioridadSolicitud.PRIORITARIA
-            or solicitud.modalidad == ModalidadSolicitud.ESPECIAL
-        )
-    ]
-    if exclusivas_recogidas:
-        solicitudes = exclusivas_recogidas + [
-            solicitud
-            for solicitud in solicitudes
-            if solicitud not in exclusivas_recogidas
-        ]
 
+
+def crear_paradas_operativas(solicitudes, orden_previo=(), *, punto_gps=None):
     paradas = []
-    for solicitud in solicitudes:
+    for solicitud in sorted(solicitudes, key=lambda s: (s.asignada_en or s.creado_en, str(s.pk))):
         paradas.extend(_paradas_de_solicitud(solicitud))
+    paradas = ordenar_paradas(paradas, orden_previo, punto_gps=punto_gps)
     for orden, parada in enumerate(paradas, start=1):
         parada["orden"] = orden
 
     return paradas
 
 
+def obtener_paradas_operativas(repartidor):
+    """Lee el orden guardado, sin replanificar por GPS ni escribir versiones."""
+    ultima = VersionRuta.objects.filter(
+        ruta__repartidor=repartidor, ruta__estado=RutaRepartidor.Estado.ACTIVA,
+    ).order_by("-numero").values("pk")[:1]
+    orden_previo = ParadaVersionRuta.objects.filter(version_id=ultima).order_by("orden").values_list(
+        "solicitud_id", "tipo",
+    )
+    return crear_paradas_operativas(obtener_solicitudes_operativas(repartidor), orden_previo)
+
+
 def obtener_mi_ruta(usuario):
     """Lectura operativa: nunca modifica versiones ni consulta proveedores."""
-    from apps.rutas.models import RutaRepartidor
     from apps.rutas.presentacion import presentar_mapa_integrado
     from apps.rutas.ruta_vial import presentar_ruta_vial
+    from apps.seguimiento.llegadas import obtener_llegada_actual
+    from apps.solicitudes.flujo_automatico import presentar_flujo_actual
 
     repartidor = _obtener_repartidor_propio(usuario)
     jornada_id = (
@@ -151,10 +141,12 @@ def obtener_mi_ruta(usuario):
         "jornada_id": jornada_id,
         "ruta_id": ruta.id if ruta else None,
         "version_actual": version_actual,
-        "orden_tipo": "ASIGNACION",
+        "orden_tipo": "CERCANIA_GPS",
         "ruta_calculada": ruta_vial["estado"] == "CALCULADA",
         "ruta_vial": ruta_vial,
         "mapa": presentar_mapa_integrado(paradas, ruta_vial),
         "proxima_parada": paradas[0] if paradas else None,
+        "llegada_actual": obtener_llegada_actual(repartidor, paradas),
+        "flujo_actual": presentar_flujo_actual(paradas),
         "paradas": paradas,
     }

@@ -111,6 +111,7 @@ class PruebasMiRuta(TestCase):
         asignada_en = timezone.now() - timedelta(minutes=minutos_atras)
         especial = modalidad == ModalidadSolicitud.ESPECIAL
         solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=numero,
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -147,7 +148,7 @@ class PruebasMiRuta(TestCase):
         self.assertEqual(respuesta.data["jornada_id"], str(jornada.id))
         self.assertEqual(respuesta.data["paradas"], [])
         self.assertIsNone(respuesta.data["proxima_parada"])
-        self.assertEqual(respuesta.data["orden_tipo"], "ASIGNACION")
+        self.assertEqual(respuesta.data["orden_tipo"], "CERCANIA_GPS")
         self.assertFalse(respuesta.data["ruta_calculada"])
         self.assertIsNone(respuesta.data["ruta_id"])
         self.assertIsNone(respuesta.data["version_actual"])
@@ -422,6 +423,7 @@ class PruebasMiRuta(TestCase):
         )
 
         solicitud_ajena = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-HISTORIAL-AJENA",
             empresa=otra_empresa,
             solicitada_por=gerente_ajeno,

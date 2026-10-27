@@ -128,6 +128,7 @@ class PruebasAsignacionesSolicitud(TestCase):
 
     def setUp(self):
         self.solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=f"SOL-PRUEBA-{Solicitud.objects.count() + 1}",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -142,7 +143,8 @@ class PruebasAsignacionesSolicitud(TestCase):
     def _datos_creacion_automatica(self):
         for ubicacion in (self.origen, self.destino):
             ubicacion.localidad = "Tegucigalpa"
-            ubicacion.save(update_fields=("localidad", "actualizado_en"))
+            ubicacion.nivel_administrativo_1 = "Francisco Morazán"
+            ubicacion.save(update_fields=("localidad", "nivel_administrativo_1", "actualizado_en"))
             UbicacionEmpresa.objects.create(
                 empresa=self.empresa,
                 ubicacion=ubicacion,
@@ -169,6 +171,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             "origen_id": self.origen.id,
             "destino_id": self.destino.id,
             "articulos": [{"tipo_articulo": "Documentos", "cantidad": 1}],
+            "cantidad_tubos": 1,
         }
 
     def _registrar_gps(self, repartidor, latitud, longitud):
@@ -292,6 +295,7 @@ class PruebasAsignacionesSolicitud(TestCase):
         for indice in range(2, 7):
             solicitudes.append(
                 Solicitud.objects.create(
+                    cantidad_tubos=1,
                     numero=f"SOL-LIMITE-{indice}",
                     empresa=self.empresa,
                     solicitada_por=self.administrador,
@@ -471,6 +475,9 @@ class PruebasAsignacionesSolicitud(TestCase):
     def test_creacion_asigna_al_gps_mas_cercano_y_notifica_solo_a_el(self):
         datos = self._datos_creacion_automatica()
         lejos, cerca = self.repartidores
+        # Una posición por motorista: la cercanía no debe depender de un
+        # desempate por UUID si el reloj repite la fecha del GPS inicial.
+        RegistroUbicacion.objects.filter(repartidor__in=self.repartidores).delete()
         self._registrar_gps(lejos, "14.200000", "-87.300000")
         self._registrar_gps(cerca, "14.073000", "-87.192000")
 
@@ -535,6 +542,7 @@ class PruebasAsignacionesSolicitud(TestCase):
         self._registrar_gps(lejos, "14.200000", "-87.300000")
         for indice in range(5):
             Solicitud.objects.create(
+                cantidad_tubos=1,
                 numero=f"SOL-AUTO-LLENO-{indice}",
                 empresa=self.empresa,
                 solicitada_por=self.administrador,
@@ -613,7 +621,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             )
 
         self.solicitud.refresh_from_db()
-        self.assertEqual(self.solicitud.estado, EstadoSolicitud.ASIGNADA)
+        self.assertEqual(self.solicitud.estado, EstadoSolicitud.HACIA_RECOLECCION)
         self.assertEqual(self.solicitud.repartidor_asignado_id, elegido.id)
         self.assertEqual(
             AsignacionSolicitud.objects.filter(solicitud=self.solicitud).count(), 1
@@ -640,11 +648,16 @@ class PruebasAsignacionesSolicitud(TestCase):
             )
 
         solicitud.refresh_from_db()
-        self.assertEqual(solicitud.estado, EstadoSolicitud.ASIGNADA)
+        # Otro pendiente de la fixture comparte origen. Si la hora de asignación
+        # empata, el UUID puede elegir cualquiera como próxima parada automática.
+        self.assertIn(solicitud.estado, (EstadoSolicitud.ASIGNADA, EstadoSolicitud.HACIA_RECOLECCION))
         self.assertEqual(solicitud.repartidor_asignado_id, self.repartidores[0].id)
         self.assertEqual(
             AsignacionSolicitud.objects.filter(solicitud=solicitud).count(), 1
         )
+        self.assertEqual(Solicitud.objects.filter(
+            repartidor_asignado=self.repartidores[0], estado=EstadoSolicitud.HACIA_RECOLECCION,
+        ).count(), 1)
 
     def test_reintento_respeta_cupo_y_antiguedad(self):
         from zoneinfo import ZoneInfo
@@ -662,6 +675,7 @@ class PruebasAsignacionesSolicitud(TestCase):
         for indice in range(6):
             pendientes.append(
                 Solicitud.objects.create(
+                    cantidad_tubos=1,
                     numero=f"SOL-REINTENTO-{indice}",
                     empresa=self.empresa,
                     solicitada_por=self.administrador,
@@ -682,7 +696,7 @@ class PruebasAsignacionesSolicitud(TestCase):
         self.assertEqual(
             Solicitud.objects.filter(
                 id__in=[solicitud.id for solicitud in pendientes],
-                estado=EstadoSolicitud.ASIGNADA,
+                estado__in=(EstadoSolicitud.ASIGNADA, EstadoSolicitud.HACIA_RECOLECCION),
             ).count(),
             5,
         )
@@ -695,7 +709,7 @@ class PruebasAsignacionesSolicitud(TestCase):
         )
         self.assertEqual(
             Solicitud.objects.get(id=pendientes[0].id).estado,
-            EstadoSolicitud.ASIGNADA,
+            EstadoSolicitud.HACIA_RECOLECCION,
             list(
                 Solicitud.objects.filter(
                     id__in=[solicitud.id for solicitud in pendientes]
@@ -713,6 +727,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             {"repartidor_id": self.repartidores[0].id},
         )
         pendiente = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-REINTENTO-AL-CERRAR",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -733,7 +748,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             )
 
         pendiente.refresh_from_db()
-        self.assertEqual(pendiente.estado, EstadoSolicitud.ASIGNADA)
+        self.assertEqual(pendiente.estado, EstadoSolicitud.HACIA_RECOLECCION)
         self.assertEqual(
             pendiente.repartidor_asignado_id, self.repartidores[0].id
         )
@@ -746,6 +761,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             {"repartidor_id": anterior.id},
         )
         pendiente = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-REINTENTO-REASIGNACION",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -766,5 +782,5 @@ class PruebasAsignacionesSolicitud(TestCase):
             )
 
         pendiente.refresh_from_db()
-        self.assertEqual(pendiente.estado, EstadoSolicitud.ASIGNADA)
+        self.assertEqual(pendiente.estado, EstadoSolicitud.HACIA_RECOLECCION)
         self.assertEqual(pendiente.repartidor_asignado_id, anterior.id)

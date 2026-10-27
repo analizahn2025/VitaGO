@@ -9,11 +9,13 @@ from apps.flota.models import Vehiculo
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
 from apps.organizaciones.models import Empresa
 from apps.organizaciones.opciones import EstadoOrganizacion
-from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
-from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas
+from apps.repartidores.models import Repartidor
+from apps.repartidores.habilitacion import roles_operativos_vigentes
+from apps.repartidores.operacion import guardar_cambio_operativo
+from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas, obtener_carga_tubos
 from apps.repartidores.opciones import EstadoOperativoRepartidor
-from apps.usuarios.models import RolUsuario, Usuario
-from apps.usuarios.opciones import EstadoUsuario, TipoAlcanceRol
+from apps.usuarios.models import Usuario
+from apps.usuarios.opciones import EstadoUsuario
 from apps.usuarios.servicios import obtener_alcances_permiso, usuario_tiene_permiso
 
 
@@ -34,23 +36,7 @@ def _obtener_usuario_activo(identificador):
 
 
 def _validar_rol_repartidor(usuario_objetivo, empresa):
-    filtros = {
-        "usuario": usuario_objetivo,
-        "activo": True,
-        "rol__activo": True,
-    }
-    if settings.MODO_APLICACION == "CORPORATIVO":
-        filtros.update(
-            rol__codigo="REPARTIDOR_CORPORATIVO",
-            tipo_alcance=TipoAlcanceRol.EMPRESA,
-            empresa=empresa,
-        )
-    else:
-        filtros.update(
-            rol__codigo="REPARTIDOR_RED",
-            tipo_alcance=TipoAlcanceRol.GLOBAL,
-        )
-    if not RolUsuario.objetos.filter(**filtros).exists():
+    if not roles_operativos_vigentes(usuario_objetivo.pk, getattr(empresa, "pk", None)).exists():
         raise ValidationError(
             {"usuario_id": "El usuario no posee el rol de motorista requerido."}
         )
@@ -154,6 +140,37 @@ def _exigir_actualizacion_propia(usuario, repartidor, cambios):
 
 
 @transaction.atomic
+def configurar_limite_tubos(usuario, identificador, datos):
+    try:
+        repartidor = Repartidor.objects.select_for_update(of=("self",)).select_related("usuario", "empresa", "vehiculo").get(pk=identificador)
+    except Repartidor.DoesNotExist as error:
+        raise Http404("El motorista no existe.") from error
+    if not _puede_administrar_repartidor(usuario, repartidor):
+        raise PermissionDenied('No tiene el permiso requerido: "repartidor.administrar".')
+    limite = datos["limite_tubos"]
+    carga = obtener_carga_tubos(repartidor)
+    if isinstance(limite, bool) or not isinstance(limite, int) or not 1 <= limite <= 2147483647:
+        raise ValidationError({"limite_tubos": "Debe ser un entero positivo."})
+    if limite < carga["tubos_comprometidos"]:
+        raise ValidationError({"limite_tubos": "No puede ser menor que los tubos ya comprometidos."})
+    anterior = repartidor.limite_tubos
+    if anterior == limite:
+        return repartidor
+    repartidor.limite_tubos = limite
+    repartidor.save(update_fields=("limite_tubos", "actualizado_en"))
+    guardar_cambio_operativo(
+        repartidor, usuario, estado_nuevo=repartidor.estado_operativo,
+        capacidad_nueva=calcular_capacidad(contar_solicitudes_activas(repartidor), limite_tubos=limite, **carga),
+        motivo=datos.get("motivo") or "Configuración administrativa del límite de tubos.",
+        datos_adicionales={"limite_tubos_anterior": anterior, "limite_tubos_nuevo": limite},
+    )
+    if limite > anterior:
+        from apps.solicitudes.servicios import programar_reintento_pendientes
+        programar_reintento_pendientes(repartidor.empresa_id)
+    return repartidor
+
+
+@transaction.atomic
 def actualizar_operacion_repartidor(usuario, identificador_repartidor, cambios):
     try:
         repartidor = (
@@ -183,7 +200,7 @@ def actualizar_operacion_repartidor(usuario, identificador_repartidor, cambios):
     estado_anterior = repartidor.estado_operativo
     capacidad_anterior = repartidor.capacidad
     estado_nuevo = cambios.get("estado_operativo", estado_anterior)
-    capacidad_nueva = calcular_capacidad(contar_solicitudes_activas(repartidor))
+    capacidad_nueva = calcular_capacidad(contar_solicitudes_activas(repartidor), limite_tubos=repartidor.limite_tubos, **obtener_carga_tubos(repartidor))
 
     if estado_nuevo == estado_anterior and capacidad_nueva == capacidad_anterior:
         raise ValidationError("La operación no contiene cambios efectivos.")
@@ -196,17 +213,9 @@ def actualizar_operacion_repartidor(usuario, identificador_repartidor, cambios):
             {"estado_operativo": "Se requiere un vehículo activo para estar disponible."}
         )
 
-    repartidor.estado_operativo = estado_nuevo
-    repartidor.capacidad = capacidad_nueva
-    repartidor.save(update_fields=("estado_operativo", "capacidad", "actualizado_en"))
-    HistorialEstadoRepartidor.objects.create(
-        repartidor=repartidor,
-        estado_anterior=estado_anterior,
-        estado_nuevo=estado_nuevo,
-        capacidad_anterior=capacidad_anterior,
-        capacidad_nueva=capacidad_nueva,
-        realizado_por=usuario,
-        motivo=motivo,
+    guardar_cambio_operativo(
+        repartidor, usuario, estado_nuevo=estado_nuevo,
+        capacidad_nueva=capacidad_nueva, motivo=motivo,
     )
     if (
         estado_nuevo == EstadoOperativoRepartidor.DISPONIBLE
@@ -215,4 +224,6 @@ def actualizar_operacion_repartidor(usuario, identificador_repartidor, cambios):
         from apps.solicitudes.servicios import programar_reintento_pendientes
 
         programar_reintento_pendientes(repartidor.empresa_id)
+        from apps.solicitudes.flujo_automatico import programar_avance_automatico
+        programar_avance_automatico(repartidor.pk)
     return repartidor

@@ -11,11 +11,13 @@ from apps.solicitudes.vistas import (
     VistaResumenSolicitante,
     VistaTransicionSolicitud,
     VistaSincronizacionGPSMovimiento,
+    VistaCantidadTubosSolicitud,
 )
 
 app_name = "solicitudes"
 
 urlpatterns = [
+    path("<uuid:solicitud_id>/cantidad-tubos/", VistaCantidadTubosSolicitud.as_view(), name="cantidad-tubos"),
     path("<uuid:solicitud_id>/sincronizacion-gps/", VistaSincronizacionGPSMovimiento.as_view(), name="sincronizacion-gps"),
     path(
         "",

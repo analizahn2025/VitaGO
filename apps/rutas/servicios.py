@@ -6,7 +6,9 @@ from django.utils import timezone
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.opciones import EstadoJornada
 from apps.rutas.models import ParadaVersionRuta, RutaRepartidor, VersionRuta
-from apps.rutas.selectores import obtener_paradas_operativas
+from apps.rutas.ordenamiento import clave_parada
+from apps.rutas.selectores import crear_paradas_operativas, obtener_solicitudes_operativas
+from apps.seguimiento.vigencia import posiciones_vigentes
 
 
 def _firma_parada(parada):
@@ -41,13 +43,13 @@ def sincronizar_ruta(repartidor, motivo, *, jornada=None, cerrar=False, finaliza
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("La ruta debe sincronizarse dentro de una transacción.")
 
-    paradas = obtener_paradas_operativas(repartidor)
+    solicitudes = obtener_solicitudes_operativas(repartidor)
     ruta = (
         RutaRepartidor.objects.select_for_update()
         .filter(repartidor=repartidor, estado=RutaRepartidor.Estado.ACTIVA)
         .first()
     )
-    if ruta is None and not paradas:
+    if ruta is None and not solicitudes:
         return None
 
     if jornada is None and not cerrar:
@@ -61,11 +63,21 @@ def sincronizar_ruta(repartidor, motivo, *, jornada=None, cerrar=False, finaliza
         ruta.save(update_fields=("jornada", "actualizado_en"))
 
     ultima = ruta.versiones.order_by("-numero").first()
+    anteriores = list(ultima.paradas.order_by("orden")) if ultima else []
+    orden_previo = [(str(parada.solicitud_id), parada.tipo) for parada in anteriores]
+    paradas = crear_paradas_operativas(solicitudes, orden_previo)
+    cambio_paradas = {clave_parada(p) for p in paradas} != set(orden_previo)
+    punto_gps = None
+    # Replanificar solo ante altas/bajas o una parada completada. Cambiar GPS,
+    # consultar/calcular y llegar sin completar la foto no cambian el orden.
+    if solicitudes and (ultima is None or cambio_paradas):
+        posicion = posiciones_vigentes().filter(repartidor=repartidor).first()
+        if posicion is not None:
+            punto_gps = (posicion.latitud, posicion.longitud)
+    if punto_gps is not None:
+        paradas = crear_paradas_operativas(solicitudes, orden_previo, punto_gps=punto_gps)
     firma_actual = [_firma_parada(parada) for parada in paradas]
-    firma_anterior = (
-        [_firma_persistida(parada) for parada in ultima.paradas.order_by("orden")]
-        if ultima else None
-    )
+    firma_anterior = [_firma_persistida(parada) for parada in anteriores] if ultima else None
     if firma_actual != firma_anterior:
         version = VersionRuta.objects.create(
             ruta=ruta,

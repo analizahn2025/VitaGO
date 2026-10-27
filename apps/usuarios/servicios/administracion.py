@@ -600,6 +600,11 @@ def revocar_rol_usuario(
         )
     )
     cerrar_todas_las_sesiones(usuario_bloqueado)
+    if asignacion.rol.codigo == "REPARTIDOR_CORPORATIVO":
+        # Se revalida después del commit y bajo el bloqueo del motorista:
+        # revocar un alcance no retira servicios si conserva otro válido.
+        from apps.solicitudes.contingencias import programar_suspension
+        programar_suspension(usuario_bloqueado.pk, usuario_administrador)
     return asignacion
 
 

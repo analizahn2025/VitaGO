@@ -39,6 +39,7 @@ class Repartidor(ModeloUUIDConMarcasDeTiempo):
         default=CapacidadRepartidor.VACIO,
     )
     activo = models.BooleanField(default=True)
+    limite_tubos = models.PositiveIntegerField(default=20)
 
     class Meta:
         db_table = "repartidores"
@@ -54,6 +55,7 @@ class Repartidor(ModeloUUIDConMarcasDeTiempo):
             ),
         ]
         constraints = [
+            models.CheckConstraint(condition=models.Q(limite_tubos__gte=1), name="repart_limite_tubos_ck"),
             models.CheckConstraint(
                 condition=models.Q(
                     estado_operativo__in=EstadoOperativoRepartidor.values
@@ -93,6 +95,7 @@ class Repartidor(ModeloUUIDConMarcasDeTiempo):
 
 
 class HistorialEstadoRepartidor(ModeloUUIDConMarcasDeTiempo):
+    datos_adicionales = models.JSONField(default=dict, blank=True)
     repartidor = models.ForeignKey(
         Repartidor,
         on_delete=models.PROTECT,

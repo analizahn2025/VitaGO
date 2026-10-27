@@ -5,6 +5,8 @@ from apps.nucleo.models import ModeloUUIDConMarcasDeTiempo
 
 
 class EvidenciaSolicitud(ModeloUUIDConMarcasDeTiempo):
+    temperatura_contenedor_c = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    fuente_temperatura = models.CharField(max_length=16, null=True, blank=True)
     solicitud = models.ForeignKey(
         "solicitudes.Solicitud",
         on_delete=models.PROTECT,
@@ -42,6 +44,12 @@ class EvidenciaSolicitud(ModeloUUIDConMarcasDeTiempo):
             ),
         ]
         constraints = [
+            models.CheckConstraint(
+                condition=(
+                    models.Q(temperatura_contenedor_c__isnull=True, fuente_temperatura__isnull=True)
+                    | models.Q(temperatura_contenedor_c__isnull=False, fuente_temperatura__isnull=False, fuente_temperatura__in=("MANUAL", "AUTOMATICA"), tipo="FOTO_RECOLECCION")
+                ), name="evid_temperatura_fuente_ck",
+            ),
             models.CheckConstraint(
                 condition=models.Q(tipo__in=TipoEvidenciaSolicitud.values),
                 name="evidencia_tipo_valido_ck",

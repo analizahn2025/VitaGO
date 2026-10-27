@@ -33,11 +33,16 @@ def distancia_linea_recta_km(latitud_a, longitud_a, latitud_b, longitud_b):
 
 def candidatos_ordenados(solicitud):
     """Ordena solo por GPS reciente y preciso; fallback explícito configurable."""
+    if solicitud.cantidad_tubos is None:
+        return []
     ultimo_gps = posiciones_vigentes().filter(repartidor_id=OuterRef("pk"))
+    # Corporate: flota exclusiva de su empresa. Network: flota global, no
+    # vinculada a ninguna empresa cliente; sigue exigiendo su rol operativo.
+    empresa_id = None if settings.MODO_APLICACION == "EXTERNO" else solicitud.empresa_id
     consulta = filtrar_repartidores_disponibles(
         anotar_carga_repartidores(
-            Repartidor.objects.filter(empresa=solicitud.empresa)
-        )
+            Repartidor.objects.filter(empresa_id=empresa_id)
+        ), solicitud.cantidad_tubos
     ).annotate(
         ultima_latitud=Subquery(ultimo_gps.values("latitud")[:1]),
         ultima_longitud=Subquery(ultimo_gps.values("longitud")[:1]),

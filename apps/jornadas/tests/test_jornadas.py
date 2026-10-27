@@ -13,7 +13,7 @@ from apps.geografia.models import Pais
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.opciones import EstadoJornada
 from apps.jornadas.selectores import listar_jornadas_autorizadas
-from apps.jornadas.servicios import finalizar_jornada, iniciar_jornada
+from apps.jornadas.servicios import _calcular_resumen, finalizar_jornada, iniciar_jornada
 from apps.seguimiento.models import RegistroUbicacion
 from apps.organizaciones.models import Empresa
 from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
@@ -135,6 +135,7 @@ class PruebasJornadas(TestCase):
     def _crear_solicitud_entregada(self, numero, prioridad):
         ahora = timezone.now()
         return Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=numero,
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -211,6 +212,7 @@ class PruebasJornadas(TestCase):
 
     def test_inicio_de_jornada_reintenta_solicitud_pendiente(self):
         pendiente = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-PENDIENTE-INICIO-JORNADA",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -232,7 +234,7 @@ class PruebasJornadas(TestCase):
             })
 
         pendiente.refresh_from_db()
-        self.assertEqual(pendiente.estado, EstadoSolicitud.ASIGNADA)
+        self.assertEqual(pendiente.estado, EstadoSolicitud.HACIA_RECOLECCION)
         self.assertEqual(pendiente.repartidor_asignado_id, self.repartidor.id)
         self.assertEqual(
             AsignacionSolicitud.objects.filter(solicitud=pendiente).count(), 1
@@ -262,6 +264,7 @@ class PruebasJornadas(TestCase):
     def test_no_finaliza_con_asignacion_activa(self):
         jornada = self._iniciar()
         solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-JORNADA-ACTIVA",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -319,6 +322,76 @@ class PruebasJornadas(TestCase):
             EstadoOperativoRepartidor.DESCONECTADO,
         )
         self.assertEqual(self.repartidor.capacidad, CapacidadRepartidor.VACIO)
+
+    def test_resumen_cuenta_entregas_con_cierre_exacto_normal_y_prioritario(self):
+        jornada = self._iniciar_hace_una_hora()
+        entrega = timezone.now() - timedelta(seconds=1)
+        for prioridad in (PrioridadSolicitud.NORMAL, PrioridadSolicitud.PRIORITARIA):
+            solicitud = self._crear_solicitud_entregada(f"CIERRE-EXACTO-{prioridad}", prioridad)
+            solicitud.recolectada_en = entrega - timedelta(minutes=1)
+            solicitud.entregada_en = entrega
+            solicitud.save()
+            AsignacionSolicitud.objects.create(
+                solicitud=solicitud, repartidor=self.repartidor,
+                asignada_por=self.administrador,
+                estado=EstadoAsignacionSolicitud.FINALIZADA,
+                asignada_en=jornada.iniciada_en, finalizada_en=entrega,
+            )
+        resumen = _calcular_resumen(jornada, entrega)
+        self.assertEqual(
+            tuple(resumen[campo] for campo in (
+                "servicios_completados", "entregas_completadas",
+                "recolecciones_completadas", "servicios_normales", "servicios_prioritarios",
+            )),
+            (2, 2, 2, 1, 1),
+        )
+
+    def test_inicio_y_cierre_usan_reloj_servidor_no_fechas_del_cliente(self):
+        cliente = APIClient()
+        cliente.force_authenticate(self.repartidor.usuario)
+        antes = timezone.now()
+        manipuladas = {"iniciada_en": (antes - timedelta(days=3650)).isoformat(),
+                       "finalizada_en": (antes + timedelta(days=3650)).isoformat()}
+        inicio = cliente.post(reverse("jornadas:iniciar"), manipuladas, format="json")
+        self.assertEqual(inicio.status_code, 201, inicio.data)
+        jornada = JornadaRepartidor.objects.get(pk=inicio.data["id"])
+        self.assertGreaterEqual(jornada.iniciada_en, antes)
+        self.assertLessEqual(jornada.iniciada_en, timezone.now())
+        iniciada_en = jornada.iniciada_en
+        antes_cierre = timezone.now()
+        cierre = cliente.post(reverse("jornadas:finalizar", args=[jornada.pk]), manipuladas, format="json")
+        self.assertEqual(cierre.status_code, 200, cierre.data)
+        jornada.refresh_from_db()
+        self.assertEqual(jornada.iniciada_en, iniciada_en)
+        self.assertGreaterEqual(jornada.finalizada_en, antes_cierre)
+        self.assertLessEqual(jornada.finalizada_en, timezone.now())
+
+    def test_cierre_exacto_no_atribuye_entrega_a_asignacion_cancelada_o_reasignada(self):
+        original = self._iniciar_hace_una_hora()
+        reemplazo = JornadaRepartidor.objects.create(
+            repartidor=self.repartidores[1], iniciada_en=original.iniciada_en,
+        )
+        entrega = timezone.now() - timedelta(seconds=1)
+        for estado in (EstadoAsignacionSolicitud.CANCELADA, EstadoAsignacionSolicitud.REASIGNADA):
+            solicitud = self._crear_solicitud_entregada(f"CIERRE-LIMITE-{estado}", PrioridadSolicitud.NORMAL)
+            solicitud.repartidor_asignado = self.repartidores[1]
+            solicitud.recolectada_en = entrega - timedelta(minutes=1)
+            solicitud.entregada_en = entrega
+            solicitud.save()
+            AsignacionSolicitud.objects.create(
+                solicitud=solicitud, repartidor=self.repartidor,
+                asignada_por=self.administrador, estado=estado,
+                asignada_en=original.iniciada_en, finalizada_en=entrega,
+            )
+            AsignacionSolicitud.objects.create(
+                solicitud=solicitud, repartidor=self.repartidores[1],
+                asignada_por=self.administrador, estado=EstadoAsignacionSolicitud.FINALIZADA,
+                asignada_en=entrega, finalizada_en=entrega,
+            )
+        anterior = _calcular_resumen(original, entrega)
+        nuevo = _calcular_resumen(reemplazo, entrega)
+        self.assertEqual((anterior["recolecciones_completadas"], anterior["entregas_completadas"]), (2, 0))
+        self.assertEqual((nuevo["recolecciones_completadas"], nuevo["entregas_completadas"]), (0, 2))
 
     def test_kilometraje_cuenta_solo_puntos_operativos_en_asignacion(self):
         jornada = self._iniciar_hace_una_hora()
@@ -381,6 +454,7 @@ class PruebasJornadas(TestCase):
         inicio = jornada.iniciada_en + timedelta(minutes=10)
         fin = jornada.iniciada_en + timedelta(minutes=30)
         solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-JORNADA-ESPECIAL",
             empresa=self.empresa,
             solicitada_por=self.administrador,

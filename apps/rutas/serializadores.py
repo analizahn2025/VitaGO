@@ -2,6 +2,7 @@
 
 from rest_framework import serializers
 
+from apps.seguimiento.serializadores import SerializadorLlegadaDetectada
 from apps.solicitudes.opciones import (
     EstadoSolicitud,
     ModalidadSolicitud,
@@ -14,6 +15,7 @@ class SerializadorParadaRuta(serializers.Serializer):
     orden = serializers.IntegerField(min_value=1)
     solicitud_id = serializers.UUIDField()
     numero_solicitud = serializers.CharField()
+    cantidad_tubos = serializers.IntegerField(allow_null=True, min_value=1)
     prioridad = serializers.ChoiceField(choices=PrioridadSolicitud.choices)
     modalidad = serializers.ChoiceField(
         choices=ModalidadSolicitud.choices, allow_null=True
@@ -42,12 +44,14 @@ class SerializadorMiRuta(serializers.Serializer):
     jornada_id = serializers.UUIDField(allow_null=True)
     ruta_id = serializers.UUIDField(allow_null=True)
     version_actual = serializers.IntegerField(allow_null=True, min_value=1)
-    orden_tipo = serializers.ChoiceField(choices=("ASIGNACION",))
+    orden_tipo = serializers.ChoiceField(choices=("ASIGNACION", "CERCANIA_GPS"))
     ruta_calculada = serializers.BooleanField()
     proxima_parada = SerializadorParadaRuta(allow_null=True)
     paradas = SerializadorParadaRuta(many=True)
     mapa = SerializadorMapaIntegrado()
     ruta_vial = serializers.JSONField()
+    llegada_actual = SerializadorLlegadaDetectada(allow_null=True)
+    flujo_actual = serializers.JSONField()
 
 
 class SerializadorCalcularRuta(serializers.Serializer):

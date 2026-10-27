@@ -1,6 +1,6 @@
 """Consultas autorizadas y optimizadas de motoristas."""
 
-from django.db.models import Q
+from django.db.models import F, Q
 from django.http import Http404
 from rest_framework.exceptions import PermissionDenied
 
@@ -41,17 +41,13 @@ def listar_repartidores_autorizados(usuario, filtros=None):
     if filtros.get("estado_operativo"):
         consulta = consulta.filter(estado_operativo=filtros["estado_operativo"])
     if filtros.get("capacidad"):
+        lleno = Q(solicitudes_activas_calculadas__gte=LIMITE_SOLICITUDES) | Q(tubos_comprometidos__gte=F("limite_tubos")) | Q(solicitudes_sin_cantidad_tubos__gt=0)
         if filtros["capacidad"] == CapacidadRepartidor.VACIO:
             consulta = consulta.filter(solicitudes_activas_calculadas=0)
         elif filtros["capacidad"] == CapacidadRepartidor.LLENO:
-            consulta = consulta.filter(
-                solicitudes_activas_calculadas__gte=LIMITE_SOLICITUDES
-            )
+            consulta = consulta.filter(lleno)
         else:
-            consulta = consulta.filter(
-                solicitudes_activas_calculadas__gt=0,
-                solicitudes_activas_calculadas__lt=LIMITE_SOLICITUDES,
-            )
+            consulta = consulta.filter(solicitudes_activas_calculadas__gt=0).exclude(lleno)
     if "activo" in filtros:
         consulta = consulta.filter(activo=filtros["activo"])
     return consulta.order_by("usuario__nombres", "usuario__apellidos", "id")
@@ -59,7 +55,7 @@ def listar_repartidores_autorizados(usuario, filtros=None):
 
 def listar_repartidores_disponibles(usuario, filtros=None):
     return filtrar_repartidores_disponibles(
-        listar_repartidores_autorizados(usuario, filtros)
+        listar_repartidores_autorizados(usuario, filtros), (filtros or {}).get("cantidad_tubos", 1)
     )
 
 

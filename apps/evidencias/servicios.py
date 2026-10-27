@@ -1,5 +1,6 @@
 """Casos de uso para registrar evidencias operativas privadas."""
 
+import logging
 import uuid
 import warnings
 from io import BytesIO
@@ -10,6 +11,7 @@ from django.conf import settings
 from django.core.files.storage import default_storage
 from django.db import transaction
 from django.http import Http404
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.evidencias.models import EvidenciaSolicitud
@@ -18,6 +20,9 @@ from apps.repartidores.models import Repartidor
 from apps.solicitudes.models import EventoSolicitud, Solicitud
 from apps.solicitudes.opciones import EstadoSolicitud, TipoEventoSolicitud
 from apps.usuarios.servicios import usuario_tiene_permiso
+
+
+registro = logging.getLogger("vitago.api")
 
 
 TIPOS_CONTENIDO_PERMITIDOS = {
@@ -122,6 +127,15 @@ def _validar_repartidor_asignado(usuario, solicitud):
     return repartidor
 
 
+def limpiar_archivo_nuevo(clave):
+    """Compensación del archivo recién creado; no sustituye el error original."""
+    if clave:
+        try:
+            default_storage.delete(clave)
+        except Exception:
+            registro.exception("No se pudo limpiar el archivo nuevo tras un fallo: %s", clave)
+
+
 def registrar_evidencia(usuario, solicitud_id, datos_validados):
     datos = dict(datos_validados)
     archivo = datos.pop("archivo")
@@ -132,7 +146,7 @@ def registrar_evidencia(usuario, solicitud_id, datos_validados):
         with transaction.atomic():
             try:
                 solicitud = (
-                    Solicitud.objects.select_for_update(of=("self",))
+                    Solicitud.objects.select_for_update(of=("self",), no_key=True)
                     .select_related("empresa", "sucursal")
                     .get(id=solicitud_id)
                 )
@@ -143,6 +157,16 @@ def registrar_evidencia(usuario, solicitud_id, datos_validados):
             from apps.solicitudes.vigencia import exigir_vigencia_solicitud
             exigir_vigencia_solicitud(solicitud)
             tipo = datos["tipo"]
+            if "fuente_temperatura" in datos:
+                raise ValidationError({"fuente_temperatura": "La fuente la determina el servidor."})
+            if tipo == TipoEvidenciaSolicitud.FOTO_RECOLECCION:
+                from apps.evidencias.temperaturas import validar_temperatura
+                datos["temperatura_contenedor_c"] = validar_temperatura(datos.get("temperatura_contenedor_c"))
+                datos["fuente_temperatura"] = "MANUAL"
+                from apps.solicitudes.servicios import validar_cantidad_tubos
+                validar_cantidad_tubos(solicitud.cantidad_tubos)
+            elif "temperatura_contenedor_c" in datos:
+                raise ValidationError({"temperatura_contenedor_c": "Solo corresponde a la recolección."})
             if solicitud.estado not in ESTADOS_POR_TIPO_EVIDENCIA[tipo]:
                 raise ValidationError(
                     {
@@ -153,6 +177,21 @@ def registrar_evidencia(usuario, solicitud_id, datos_validados):
                     }
                 )
 
+            es_cierre_etapa = tipo in {
+                TipoEvidenciaSolicitud.FOTO_RECOLECCION, TipoEvidenciaSolicitud.FOTO_ENTREGA,
+            }
+            if es_cierre_etapa:
+                from apps.solicitudes.flujo_automatico import exigir_siguiente_parada
+                tipo_parada = ("RECOLECCION" if tipo == TipoEvidenciaSolicitud.FOTO_RECOLECCION
+                               else "ENVIO_ESPECIAL" if solicitud.modalidad == "ESPECIAL" else "ENTREGA")
+                exigir_siguiente_parada(solicitud, repartidor, tipo_parada)
+                if (tipo == TipoEvidenciaSolicitud.FOTO_RECOLECCION
+                        and solicitud.modalidad == "ESPECIAL"
+                        and repartidor.estado_operativo not in ("AVAILABLE", "ON_ROUTE")):
+                    raise ValidationError({"estado_operativo": "Reanude la operación antes de iniciar un envío especial."})
+
+            # Hora oficial de registro, nunca la fecha manipulable del dispositivo.
+            datos["capturada_en"] = timezone.now()
             clave_propuesta = (
                 f"evidencias/{solicitud.id}/{uuid.uuid4().hex}.{extension}"
             )
@@ -176,11 +215,28 @@ def registrar_evidencia(usuario, solicitud_id, datos_validados):
                 metadatos={
                     "evidencia_id": str(evidencia.id),
                     "tipo_evidencia": evidencia.tipo,
+                    "temperatura_contenedor_c": str(evidencia.temperatura_contenedor_c) if evidencia.temperatura_contenedor_c is not None else None,
+                    "fuente_temperatura": evidencia.fuente_temperatura,
                     "capturada_en": evidencia.capturada_en.isoformat(),
                 },
             )
+            if es_cierre_etapa:
+                from apps.solicitudes.servicios import cambiar_estado_solicitud
+                datos_transicion = {"latitud": evidencia.latitud, "longitud": evidencia.longitud}
+                def avanzar(estado):
+                    evidencia.solicitud = cambiar_estado_solicitud(usuario, solicitud.pk, {
+                        **datos_transicion, "estado_destino": estado,
+                    }, automatismo={"fuente": "EVIDENCIA", "evidencia_id": str(evidencia.pk)})
+
+                if tipo == TipoEvidenciaSolicitud.FOTO_RECOLECCION:
+                    avanzar(EstadoSolicitud.RECOLECTADA)
+                    from apps.rutas.selectores import obtener_paradas_operativas
+                    paradas = obtener_paradas_operativas(repartidor)
+                    if paradas and paradas[0]["solicitud_id"] == solicitud.pk:
+                        avanzar(EstadoSolicitud.EN_TRANSITO)
+                else:
+                    avanzar(EstadoSolicitud.ENTREGADA)
             return evidencia
     except Exception:
-        if clave_guardada and default_storage.exists(clave_guardada):
-            default_storage.delete(clave_guardada)
+        limpiar_archivo_nuevo(clave_guardada)
         raise

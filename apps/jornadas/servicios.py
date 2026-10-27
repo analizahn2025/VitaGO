@@ -1,5 +1,6 @@
 """Casos de uso transaccionales para jornadas de motoristas."""
 
+from django.conf import settings
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
 from django.http import Http404
@@ -10,8 +11,8 @@ from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.kilometraje import calcular_kilometraje_operativo
 from apps.jornadas.opciones import EstadoJornada
-from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
-from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas
+from apps.repartidores.models import Repartidor
+from apps.repartidores.operacion import registrar_operacion_repartidor
 from apps.repartidores.opciones import EstadoOperativoRepartidor
 from apps.solicitudes.models import AsignacionSolicitud, Solicitud
 from apps.solicitudes.opciones import (
@@ -59,35 +60,6 @@ def _validar_coordenadas(datos):
         raise ValidationError({"longitud": "La longitud no es válida."})
 
 
-def _registrar_estado_repartidor(
-    repartidor,
-    usuario,
-    *,
-    estado_nuevo,
-    motivo,
-):
-    estado_anterior = repartidor.estado_operativo
-    capacidad_anterior = repartidor.capacidad
-    capacidad_nueva = calcular_capacidad(contar_solicitudes_activas(repartidor))
-    if estado_anterior == estado_nuevo and capacidad_anterior == capacidad_nueva:
-        return
-
-    repartidor.estado_operativo = estado_nuevo
-    repartidor.capacidad = capacidad_nueva
-    repartidor.save(
-        update_fields=("estado_operativo", "capacidad", "actualizado_en")
-    )
-    HistorialEstadoRepartidor.objects.create(
-        repartidor=repartidor,
-        estado_anterior=estado_anterior,
-        estado_nuevo=estado_nuevo,
-        capacidad_anterior=capacidad_anterior,
-        capacidad_nueva=capacidad_nueva,
-        realizado_por=usuario,
-        motivo=motivo,
-    )
-
-
 @transaction.atomic
 def iniciar_jornada(usuario, datos_validados):
     _validar_coordenadas(datos_validados)
@@ -126,7 +98,7 @@ def iniciar_jornada(usuario, datos_validados):
         longitud_inicio=datos_validados.get("longitud"),
     )
 
-    _registrar_estado_repartidor(
+    registrar_operacion_repartidor(
         repartidor,
         usuario,
         estado_nuevo=EstadoOperativoRepartidor.DISPONIBLE,
@@ -139,6 +111,8 @@ def iniciar_jornada(usuario, datos_validados):
     from apps.solicitudes.servicios import programar_reintento_pendientes
 
     programar_reintento_pendientes(repartidor.empresa_id)
+    from apps.solicitudes.flujo_automatico import programar_avance_automatico
+    programar_avance_automatico(repartidor.pk)
     return jornada
 
 
@@ -150,9 +124,17 @@ def _calcular_resumen(jornada, finalizada_en):
     )
     def solicitudes_en_fecha(campo):
         historial = AsignacionSolicitud.objects.filter(solicitud_id=OuterRef("pk"))
+        vigente_en_evento = Q(finalizada_en__isnull=True) | Q(finalizada_en__gt=OuterRef(campo))
+        if campo == "entregada_en":
+            # Entregar cierra la asignación en ese mismo instante; no incluir
+            # por igualdad al motorista retirado en una reasignación/cancelación.
+            vigente_en_evento |= Q(
+                estado=EstadoAsignacionSolicitud.FINALIZADA,
+                finalizada_en=OuterRef(campo),
+            )
         del_motorista = historial.filter(
             repartidor=jornada.repartidor, asignada_en__lte=OuterRef(campo),
-        ).filter(Q(finalizada_en__isnull=True) | Q(finalizada_en__gt=OuterRef(campo)))
+        ).filter(vigente_en_evento)
         return Solicitud.objects.filter(**{
             f"{campo}__gte": jornada.iniciada_en, f"{campo}__lte": finalizada_en,
         }).alias(tiene_historial=Exists(historial), fue_responsable=Exists(del_motorista)).filter(
@@ -184,6 +166,61 @@ def _calcular_resumen(jornada, finalizada_en):
     }
 
 
+def registrar_cierre_jornada(
+    jornada,
+    repartidor,
+    usuario,
+    *,
+    finalizada_en,
+    datos_cierre=None,
+    motivo_medicion="CIERRE",
+    motivo_estado="Finalización de jornada.",
+    finalizada_ruta_en=None,
+):
+    """Pasos comunes, dentro de la transacción y bloqueos del caso de uso.
+
+    El llamador valida propiedad, permisos, asignaciones y/o vencimiento.
+    No decide si procede un cierre manual o automático ni fabrica GPS.
+    """
+    if not transaction.get_connection().in_atomic_block:
+        raise RuntimeError(
+            "El cierre requiere una transacción y el motorista y jornada bloqueados."
+        )
+    resumen = _calcular_resumen(jornada, finalizada_en)
+    jornada.estado = EstadoJornada.FINALIZADA
+    jornada.finalizada_en = finalizada_en
+    campos = ["estado", "finalizada_en", *resumen.keys(), "actualizado_en"]
+    if datos_cierre is not None:
+        jornada.latitud_fin = datos_cierre.get("latitud")
+        jornada.longitud_fin = datos_cierre.get("longitud")
+        campos += ["latitud_fin", "longitud_fin"]
+    for campo, valor in resumen.items():
+        setattr(jornada, campo, valor)
+    jornada.save(update_fields=campos)
+
+    from apps.seguimiento.sincronizacion import consolidar_jornada
+
+    sesiones_gps = datos_cierre.get("sesiones_gps") if datos_cierre is not None else None
+    consolidar_jornada(jornada, sesiones_gps, motivo_medicion)
+
+    registrar_operacion_repartidor(
+        repartidor,
+        usuario,
+        estado_nuevo=EstadoOperativoRepartidor.DESCONECTADO,
+        motivo=motivo_estado,
+    )
+    from apps.rutas.models import VersionRuta
+    from apps.rutas.servicios import sincronizar_ruta
+
+    sincronizar_ruta(
+        repartidor,
+        VersionRuta.Motivo.CIERRE_JORNADA,
+        cerrar=True,
+        finalizada_en=finalizada_ruta_en,
+    )
+    return jornada
+
+
 @transaction.atomic
 def finalizar_jornada(usuario, jornada_id, datos_validados):
     _validar_coordenadas(datos_validados)
@@ -207,41 +244,26 @@ def finalizar_jornada(usuario, jornada_id, datos_validados):
         raise ValidationError(
             {"jornada": "No puede finalizar mientras tenga asignaciones activas."}
         )
-
     ahora = timezone.now()
-    resumen = _calcular_resumen(jornada, ahora)
-    jornada.estado = EstadoJornada.FINALIZADA
-    jornada.finalizada_en = ahora
-    jornada.latitud_fin = datos_validados.get("latitud")
-    jornada.longitud_fin = datos_validados.get("longitud")
-    for campo, valor in resumen.items():
-        setattr(jornada, campo, valor)
-    jornada.save(
-        update_fields=(
-            "estado",
-            "finalizada_en",
-            "latitud_fin",
-            "longitud_fin",
-            *resumen.keys(),
-            "actualizado_en",
-        )
-    )
+    if settings.MODO_APLICACION == "CORPORATIVO" and repartidor.empresa_id:
+        from apps.solicitudes.vigencia import limite_dia_operativo
 
-    from apps.seguimiento.sincronizacion import consolidar_jornada
-
-    consolidar_jornada(jornada, datos_validados.get("sesiones_gps"))
-
-    _registrar_estado_repartidor(
+        corte = limite_dia_operativo(jornada.iniciada_en, repartidor.empresa)
+        if ahora >= corte:
+            # Un cierre solicitado tarde conserva el corte real del día: las
+            # coordenadas actuales del teléfono no describen la medianoche.
+            return registrar_cierre_jornada(
+                jornada, repartidor, None, finalizada_en=corte,
+                motivo_medicion="FIN_DIA", motivo_estado="Fin del día operativo.",
+                finalizada_ruta_en=corte,
+            )
+    return registrar_cierre_jornada(
+        jornada,
         repartidor,
         usuario,
-        estado_nuevo=EstadoOperativoRepartidor.DESCONECTADO,
-        motivo="Finalización de jornada.",
+        finalizada_en=ahora,
+        datos_cierre=datos_validados,
     )
-    from apps.rutas.models import VersionRuta
-    from apps.rutas.servicios import sincronizar_ruta
-
-    sincronizar_ruta(repartidor, VersionRuta.Motivo.CIERRE_JORNADA, cerrar=True)
-    return jornada
 
 
 @transaction.atomic

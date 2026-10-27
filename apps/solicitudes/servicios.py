@@ -5,7 +5,7 @@ import uuid
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Q
+from django.db.models import Q, Subquery
 from django.core.exceptions import ValidationError as ValidacionModelo
 from django.http import Http404
 from django.utils import timezone
@@ -13,11 +13,14 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
 from apps.solicitudes.asignacion_automatica import candidatos_ordenados
+from apps.solicitudes.carga import validar_cantidad_tubos
+from apps.solicitudes.cobertura import comparten_departamento, departamento_normalizado
 from apps.organizaciones.models import Empresa, Sucursal
 from apps.organizaciones.opciones import EstadoOrganizacion
 from apps.solicitudes.excepciones import (
     CreacionSolicitudNoDisponible,
     LimiteSolicitudesRepartidor,
+    CupoTubosInsuficiente,
 )
 from apps.solicitudes.models import (
     AsignacionSolicitud,
@@ -39,16 +42,18 @@ from apps.solicitudes.opciones import (
 )
 from apps.ubicaciones.models import UbicacionEmpresa
 from apps.ubicaciones.opciones import EstadoUbicacion, EstadoUbicacionEmpresa
-from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
+from apps.repartidores.models import Repartidor
+from apps.repartidores.operacion import registrar_operacion_repartidor
 from apps.repartidores.capacidad import (
     LIMITE_SOLICITUDES,
-    calcular_capacidad,
     contar_solicitudes_activas,
     sincronizar_capacidad_repartidor,
+    obtener_carga_tubos,
 )
 from apps.repartidores.opciones import EstadoOperativoRepartidor
-from apps.usuarios.models import RolUsuario, Usuario
-from apps.usuarios.opciones import EstadoUsuario, TipoAlcanceRol
+from apps.repartidores.habilitacion import roles_operativos_vigentes
+from apps.usuarios.models import Usuario
+from apps.usuarios.opciones import EstadoUsuario
 from apps.usuarios.servicios import usuario_tiene_permiso
 from apps.notificaciones.servicios import crear_notificaciones_asignacion
 
@@ -135,14 +140,14 @@ def _validar_destino_corporativo(empresa, modalidad, origen, destino):
             raise ValidationError(
                 {"destino_id": "El destino debe ser otra sucursal activa."}
             )
-        ciudad_origen = (origen.localidad or "").strip().casefold()
-        ciudad_destino = (destino.localidad or "").strip().casefold()
-        if not ciudad_origen or ciudad_origen != ciudad_destino:
+        if not departamento_normalizado(origen):
+            raise ValidationError({"origen_id": "La sucursal de origen no tiene departamento registrado."})
+        if not comparten_departamento(origen, destino):
             raise ValidationError(
                 {
                     "destino_id": (
-                        "Los traslados entre sucursales deben permanecer en la "
-                        "misma ciudad."
+                        "Los traslados entre sucursales deben permanecer en el "
+                        "mismo país y departamento."
                     )
                 }
             )
@@ -166,6 +171,7 @@ def crear_solicitud(usuario, datos_validados):
         raise CreacionSolicitudNoDisponible()
 
     datos = dict(datos_validados)
+    validar_cantidad_tubos(datos.get("cantidad_tubos"))
     articulos_datos = datos.pop("articulos")
     empresa, sucursal = _obtener_empresa_y_sucursal(
         datos.pop("empresa_id"),
@@ -296,23 +302,7 @@ def crear_solicitud(usuario, datos_validados):
 
 
 def _validar_rol_operativo_repartidor(repartidor, empresa):
-    filtros = {
-        "usuario_id": repartidor.usuario_id,
-        "activo": True,
-        "rol__activo": True,
-    }
-    if settings.MODO_APLICACION == "CORPORATIVO":
-        filtros.update(
-            rol__codigo="REPARTIDOR_CORPORATIVO",
-            tipo_alcance=TipoAlcanceRol.EMPRESA,
-            empresa=empresa,
-        )
-    else:
-        filtros.update(
-            rol__codigo="REPARTIDOR_RED",
-            tipo_alcance=TipoAlcanceRol.GLOBAL,
-        )
-    if not RolUsuario.objetos.filter(**filtros).exists():
+    if not roles_operativos_vigentes(repartidor.usuario_id, empresa.pk).exists():
         raise ValidationError(
             {"repartidor_id": "El usuario ya no posee el rol de motorista requerido."}
         )
@@ -325,6 +315,13 @@ def _validar_repartidor_disponible(repartidor, solicitud):
     cantidad = contar_solicitudes_activas(repartidor)
     if cantidad >= LIMITE_SOLICITUDES:
         raise LimiteSolicitudesRepartidor()
+    validar_cantidad_tubos(solicitud.cantidad_tubos)
+    carga = obtener_carga_tubos(repartidor)
+    if carga["solicitudes_sin_cantidad_tubos"]:
+        raise CupoTubosInsuficiente("Debe completar la cantidad de tubos de las solicitudes activas del motorista.")
+    disponibles = max(0, repartidor.limite_tubos - carga["tubos_comprometidos"])
+    if solicitud.cantidad_tubos > disponibles:
+        raise CupoTubosInsuficiente(f"El motorista dispone de {disponibles} tubos de cupo; la solicitud requiere {solicitud.cantidad_tubos}.")
     if not repartidor.activo or not Usuario.objetos.filter(pk=repartidor.usuario_id, estado=EstadoUsuario.ACTIVO).exists():
         raise ValidationError({"repartidor_id": "El motorista no está activo."})
     if settings.MODO_APLICACION == "CORPORATIVO":
@@ -394,7 +391,9 @@ def _validar_repartidor_disponible(repartidor, solicitud):
 def asignar_solicitud_manualmente(usuario, identificador_solicitud, datos_validados):
     try:
         solicitud = (
-            Solicitud.objects.select_for_update(of=("self",))
+            # El UUID no cambia: excluir otras escrituras sin impedir que las
+            # versiones de otra ruta referencien esta solicitud por FK.
+            Solicitud.objects.select_for_update(of=("self",), no_key=True)
             .select_related("empresa", "sucursal", "repartidor_asignado")
             .get(id=identificador_solicitud)
         )
@@ -514,17 +513,25 @@ def _registrar_asignacion(
     )
     # Ya recogido: conservar la entrega, sin volver a pedir recolección.
     solicitud.estado = estado_anterior if continua_entrega else EstadoSolicitud.ASIGNADA
+    if continua_entrega and estado_anterior == EstadoSolicitud.EN_DESTINO:
+        # La llegada del motorista anterior permanece en sus eventos, pero no
+        # acredita la del reemplazo. Este continúa directamente al destino.
+        solicitud.estado = EstadoSolicitud.EN_TRANSITO
+        solicitud.llegada_destino_en = None
     solicitud.reasignacion_pendiente = False
     solicitud.asignada_en = ahora
     solicitud.save(
         update_fields=(
-            "repartidor_asignado", "estado", "asignada_en", "reasignacion_pendiente", "actualizado_en"
+            "repartidor_asignado", "estado", "asignada_en", "reasignacion_pendiente",
+            "llegada_destino_en", "actualizado_en"
         )
     )
 
     metadatos = {
         "contingencia_suspension": es_contingencia,
         "continua_entrega": continua_entrega,
+        "estado_anterior": estado_anterior,
+        "estado_nuevo": solicitud.estado,
         "traspaso_fisico_fuera_app": continua_entrega,
         "repartidor_id": str(repartidor.id),
         "repartidor_anterior_id": (
@@ -558,9 +565,9 @@ def _registrar_asignacion(
             if posicion is None:
                 raise ValidationError({"repartidor_id": "Se requiere GPS vigente para continuar un envío especial."})
             iniciar_movimiento_especial(solicitud, repartidor, latitud=posicion.latitud, longitud=posicion.longitud, ahora=ahora)
-        _registrar_cambio_operativo_repartidor(
+        registrar_operacion_repartidor(
             repartidor, usuario, estado_nuevo=EstadoOperativoRepartidor.EN_RUTA,
-            motivo="Continuación de entrega por suspensión del motorista anterior.",
+            motivo="Continuación de entrega por pérdida de habilitación del motorista anterior.",
         )
     if repartidor_anterior is not None:
         sincronizar_capacidad_repartidor(
@@ -570,7 +577,7 @@ def _registrar_asignacion(
             repartidor_anterior.estado_operativo == EstadoOperativoRepartidor.EN_RUTA
             and contar_solicitudes_activas(repartidor_anterior) == 0
         ):
-            _registrar_cambio_operativo_repartidor(
+            registrar_operacion_repartidor(
                 repartidor_anterior,
                 usuario,
                 estado_nuevo=EstadoOperativoRepartidor.DISPONIBLE,
@@ -592,6 +599,10 @@ def _registrar_asignacion(
         VersionRuta.Motivo.REASIGNACION if es_reasignacion
         else VersionRuta.Motivo.ASIGNACION,
     )
+    from apps.solicitudes.flujo_automatico import programar_avance_automatico
+    programar_avance_automatico(repartidor.pk)
+    if repartidor_anterior is not None:
+        programar_avance_automatico(repartidor_anterior.pk)
     return solicitud
 
 
@@ -608,7 +619,7 @@ def _asignar_automaticamente(solicitud, usuario):
             continue
         try:
             _validar_repartidor_disponible(repartidor, solicitud)
-        except (ValidationError, LimiteSolicitudesRepartidor):
+        except (ValidationError, LimiteSolicitudesRepartidor, CupoTubosInsuficiente):
             continue
         from apps.seguimiento.vigencia import posiciones_vigentes
 
@@ -639,7 +650,7 @@ def _asignar_automaticamente(solicitud, usuario):
 def _reintentar_primera_solicitud_pendiente(empresa_id, excluir_ids=()):
     """Bloquea la pendiente más antigua antes de buscar un motorista."""
     solicitud = (
-        Solicitud.objects.select_for_update(of=("self",), skip_locked=True)
+        Solicitud.objects.select_for_update(of=("self",), skip_locked=True, no_key=True)
         .select_related("empresa", "origen", "solicitada_por")
         .filter(
             empresa_id=empresa_id,
@@ -647,6 +658,7 @@ def _reintentar_primera_solicitud_pendiente(empresa_id, excluir_ids=()):
         )
         .filter(Q(estado=EstadoSolicitud.PENDIENTE) | Q(reasignacion_pendiente=True, estado__in=ESTADOS_SOLICITUD_ACTIVOS))
         .exclude(pk__in=excluir_ids)
+        .filter(cantidad_tubos__isnull=False)
         .order_by("-reasignacion_pendiente", "creado_en", "id")
         .first()
     )
@@ -780,37 +792,6 @@ def _obtener_repartidor_operativo(usuario, solicitud):
     return repartidor
 
 
-def _registrar_cambio_operativo_repartidor(
-    repartidor,
-    usuario,
-    *,
-    estado_nuevo,
-    motivo,
-):
-    estado_anterior = repartidor.estado_operativo
-    capacidad_anterior = repartidor.capacidad
-    capacidad_nueva = calcular_capacidad(
-        contar_solicitudes_activas(repartidor)
-    )
-    if estado_anterior == estado_nuevo and capacidad_anterior == capacidad_nueva:
-        return
-
-    repartidor.estado_operativo = estado_nuevo
-    repartidor.capacidad = capacidad_nueva
-    repartidor.save(
-        update_fields=("estado_operativo", "capacidad", "actualizado_en")
-    )
-    HistorialEstadoRepartidor.objects.create(
-        repartidor=repartidor,
-        estado_anterior=estado_anterior,
-        estado_nuevo=estado_nuevo,
-        capacidad_anterior=capacidad_anterior,
-        capacidad_nueva=capacidad_nueva,
-        realizado_por=usuario,
-        motivo=motivo,
-    )
-
-
 def _cerrar_asignacion(solicitud, repartidor, usuario, estado_destino, ahora):
     asignacion = (
         AsignacionSolicitud.objects.select_for_update()
@@ -847,14 +828,14 @@ def _cerrar_asignacion(solicitud, repartidor, usuario, estado_destino, ahora):
     )
     # Cerrar un servicio no debe levantar una pausa ni una suspensión operativa.
     if admite_asignaciones and tiene_otras_asignaciones:
-        _registrar_cambio_operativo_repartidor(
+        registrar_operacion_repartidor(
             repartidor,
             usuario,
             estado_nuevo=EstadoOperativoRepartidor.EN_RUTA,
             motivo="La solicitud terminó; conserva otras asignaciones activas.",
         )
     elif admite_asignaciones:
-        _registrar_cambio_operativo_repartidor(
+        registrar_operacion_repartidor(
             repartidor,
             usuario,
             estado_nuevo=EstadoOperativoRepartidor.DISPONIBLE,
@@ -866,10 +847,10 @@ def _cerrar_asignacion(solicitud, repartidor, usuario, estado_destino, ahora):
 
 
 @transaction.atomic
-def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
+def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados, *, llegada_gps=None, automatismo=None):
     try:
         solicitud = (
-            Solicitud.objects.select_for_update(of=("self",))
+            Solicitud.objects.select_for_update(of=("self",), no_key=True)
             .select_related("empresa", "sucursal", "repartidor_asignado")
             .get(id=identificador_solicitud)
         )
@@ -937,7 +918,41 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
         if exclusiva:
             raise ValidationError({"estado_destino": "Debe finalizar el envío prioritario recogido antes de operar otra solicitud."})
 
+        if estado_destino in {
+            EstadoSolicitud.HACIA_RECOLECCION, EstadoSolicitud.EN_RECOLECCION,
+            EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO,
+            EstadoSolicitud.EN_DESTINO, EstadoSolicitud.ENTREGADA,
+        }:
+            from apps.solicitudes.flujo_automatico import exigir_siguiente_parada
+            tipo_parada = (
+                "RECOLECCION" if estado_destino in {
+                    EstadoSolicitud.HACIA_RECOLECCION, EstadoSolicitud.EN_RECOLECCION,
+                    EstadoSolicitud.RECOLECTADA,
+                } else "ENVIO_ESPECIAL" if solicitud.modalidad == ModalidadSolicitud.ESPECIAL else "ENTREGA"
+            )
+            exigir_siguiente_parada(solicitud, repartidor, tipo_parada)
+
+    if (
+        settings.LLEGADAS_AUTOMATICAS_HABILITADAS
+        and estado_destino in {EstadoSolicitud.EN_RECOLECCION, EstadoSolicitud.EN_DESTINO}
+        and llegada_gps is None
+        and not (
+            estado_destino == EstadoSolicitud.EN_DESTINO
+            and solicitud.modalidad == ModalidadSolicitud.ESPECIAL
+            and solicitud.destino_id is None
+        )
+    ):
+        # La prueba GPS solo la produce el detector interno bajo los bloqueos
+        # operativos; nunca se toma de datos enviados por el dispositivo.
+        raise ValidationError({
+            "estado_destino": (
+                "La llegada se registra automáticamente mediante GPS en la próxima "
+                "parada. Mantenga el seguimiento activo y espere la detección."
+            ),
+        })
+
     if estado_destino == EstadoSolicitud.RECOLECTADA:
+        validar_cantidad_tubos(solicitud.cantidad_tubos)
         from apps.evidencias.models import EvidenciaSolicitud
         from apps.evidencias.opciones import TipoEvidenciaSolicitud
 
@@ -945,9 +960,14 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
             solicitud=solicitud,
             repartidor=repartidor,
             tipo=TipoEvidenciaSolicitud.FOTO_RECOLECCION,
+            temperatura_contenedor_c__isnull=False,
+            fuente_temperatura__in=("MANUAL", "AUTOMATICA"),
+            capturada_en__gte=Subquery(AsignacionSolicitud.objects.filter(
+                solicitud=solicitud, repartidor=repartidor, estado=EstadoAsignacionSolicitud.ACTIVA,
+            ).values("asignada_en")[:1]),
         ).exists():
             raise ValidationError(
-                {"evidencia": "Debe registrar la fotografía de recolección."}
+                {"evidencia": "Debe registrar la fotografía de recolección y la temperatura del contenedor."}
             )
     if estado_destino == EstadoSolicitud.ENTREGADA:
         from apps.evidencias.models import EvidenciaSolicitud
@@ -995,7 +1015,7 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
             longitud=datos_validados.get("longitud"),
             ahora=ahora,
         )
-        _registrar_cambio_operativo_repartidor(
+        registrar_operacion_repartidor(
             repartidor,
             usuario,
             estado_nuevo=EstadoOperativoRepartidor.EN_RUTA,
@@ -1020,7 +1040,7 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
         )
 
     if estado_destino == EstadoSolicitud.HACIA_RECOLECCION:
-        _registrar_cambio_operativo_repartidor(
+        registrar_operacion_repartidor(
             repartidor,
             usuario,
             estado_nuevo=EstadoOperativoRepartidor.EN_RUTA,
@@ -1049,6 +1069,10 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
     }
     if datos_validados.get("motivo"):
         metadatos["motivo"] = datos_validados["motivo"]
+    if llegada_gps is not None:
+        metadatos["llegada_gps"] = llegada_gps
+    if automatismo is not None:
+        metadatos["automatismo"] = automatismo
     EventoSolicitud.objects.create(
         solicitud=solicitud,
         tipo=TIPO_EVENTO_POR_ESTADO[estado_destino],
@@ -1068,6 +1092,9 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados):
             if estado_destino == EstadoSolicitud.CANCELADA
             else VersionRuta.Motivo.CAMBIO_ESTADO,
         )
+    if (estado_destino in ESTADOS_TERMINALES or estado_destino == EstadoSolicitud.RECOLECTADA) and repartidor is not None:
+        from apps.solicitudes.flujo_automatico import programar_avance_automatico
+        programar_avance_automatico(repartidor.pk)
     if estado_destino in ESTADOS_TERMINALES and repartidor is not None:
         programar_reintento_pendientes(solicitud.empresa_id)
     return solicitud

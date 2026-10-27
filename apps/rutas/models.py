@@ -140,6 +140,7 @@ class CalculoRutaVial(ModeloUUIDConMarcasDeTiempo):
     paradas_calculadas = models.JSONField(default=list)
     # Solo coordenadas codificadas: no se persisten distancia, duración ni respuesta cruda de Google.
     polilinea_codificada = models.TextField(blank=True)
+    polilineas_tramos = models.JSONField(default=list)
 
     class Meta:
         db_table = "calculos_ruta_vial"

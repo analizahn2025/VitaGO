@@ -7,7 +7,7 @@ from .base import (
     env,
 )
 
-DEBUG = env.bool("DEPURACION", default=True)
+DEBUG = env.bool("DEPURACION", default=False)
 SECRET_KEY = env.str(
     "CLAVE_SECRETA",
     default="clave-insegura-solo-para-desarrollo-local",

@@ -42,6 +42,7 @@ class TipoServicio(ModeloUUID):
 
 
 class Solicitud(ModeloUUIDConMarcasDeTiempo):
+    cantidad_tubos = models.PositiveIntegerField(null=True, blank=True)
     numero = models.CharField(max_length=32, unique=True)
     empresa = models.ForeignKey(
         "organizaciones.Empresa",
@@ -147,6 +148,10 @@ class Solicitud(ModeloUUIDConMarcasDeTiempo):
             ),
         ]
         constraints = [
+            models.CheckConstraint(
+                condition=models.Q(cantidad_tubos__isnull=True) | models.Q(cantidad_tubos__gte=1),
+                name="sol_cantidad_tubos_ck",
+            ),
             models.CheckConstraint(
                 condition=models.Q(
                     prioridad__in=PrioridadSolicitud.values,

@@ -5,6 +5,17 @@ from rest_framework import serializers
 from apps.seguimiento.models import RegistroUbicacion, RevisionKilometraje
 
 
+class SerializadorLlegadaDetectada(serializers.Serializer):
+    evento_id = serializers.UUIDField()
+    solicitud_id = serializers.UUIDField()
+    estado = serializers.ChoiceField(choices=("AT_PICKUP", "AT_DESTINATION"))
+    tipo_parada = serializers.ChoiceField(choices=("RECOLECCION", "ENTREGA"))
+    detectada_en = serializers.DateTimeField()
+    fuente = serializers.ChoiceField(choices=("GPS", "MANUAL"))
+    pantalla = serializers.ChoiceField(choices=("RECOLECCION", "ENTREGA"))
+    ruta = serializers.CharField()
+
+
 class SerializadorRegistroUbicacionEntrada(serializers.Serializer):
     id_cliente = serializers.UUIDField()
     sesion_gps = serializers.UUIDField(required=False, allow_null=True)

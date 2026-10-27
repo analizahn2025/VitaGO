@@ -142,6 +142,7 @@ class PruebasModalidadesCorporativas(TestCase):
             tipo_ubicacion=tipo,
             origen=OrigenUbicacion.REGISTRADA_USUARIO,
             pais=cls.pais,
+            nivel_administrativo_1="Cortés" if ciudad == "San Pedro Sula" else "Francisco Morazán",
             localidad=ciudad,
             direccion=f"Dirección de {nombre}",
             latitud=Decimal(latitud),
@@ -175,6 +176,7 @@ class PruebasModalidadesCorporativas(TestCase):
             "origen_id": self.origen.id,
             "destino_id": self.destino.id,
             "articulos": [{"tipo_articulo": "Documentos", "cantidad": 1}],
+            "cantidad_tubos": 1,
         }
         datos.update(cambios)
         return datos
@@ -203,7 +205,7 @@ class PruebasModalidadesCorporativas(TestCase):
                 self._datos_creacion(ModalidadSolicitud.ABIERTO),
             )
 
-    def test_traslado_entre_sucursales_exige_misma_ciudad(self):
+    def test_traslado_entre_sucursales_exige_mismo_departamento(self):
         with self.assertRaises(ValidationError):
             crear_solicitud(
                 self.gerente,
@@ -234,6 +236,7 @@ class PruebasModalidadesCorporativas(TestCase):
             iniciada_en=ahora - timedelta(minutes=10),
         )
         solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=f"SOL-ESP-{uuid.uuid4().hex[:8]}",
             empresa=self.empresa,
             sucursal=self.sucursal_origen,
@@ -395,7 +398,7 @@ class PruebasModalidadesCorporativas(TestCase):
         self.assertEqual(respuesta.data["destinos"], [])
         self.assertEqual(
             respuesta.data["mensaje_disponibilidad"],
-            "No hay sucursales de destino disponibles en la misma ciudad.",
+            "No hay sucursales de destino disponibles en el mismo departamento.",
         )
 
     def test_opciones_no_ocultan_origen_invalido_como_lista_vacia(self):
@@ -437,6 +440,7 @@ class PruebasModalidadesCorporativas(TestCase):
             start=1,
         ):
             Solicitud.objects.create(
+                cantidad_tubos=1,
                 numero=f"SOL-RESUMEN-{indice}",
                 empresa=self.empresa,
                 sucursal=self.sucursal_origen,
@@ -449,6 +453,7 @@ class PruebasModalidadesCorporativas(TestCase):
                 estado=estado,
             )
         Solicitud.objects.create(
+            cantidad_tubos=1,
             numero="SOL-RESUMEN-AJENA",
             empresa=self.empresa,
             sucursal=self.sucursal_origen,

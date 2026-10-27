@@ -23,6 +23,8 @@ class Command(BaseCommand):
             raise CommandError("Debe indicar --confirmar-corporativo para modificar operaciones vencidas.")
         resultado = procesar_cierre_diario()
         logging.getLogger("vitago.api").info("Mantenimiento Corporate: %s", json.dumps(resultado, ensure_ascii=False))
-        self.stdout.write(json.dumps(resultado, ensure_ascii=False))
+        # pythonw.exe no dispone de stdout; el resultado ya queda en el log.
+        if self.stdout._out is not None:
+            self.stdout.write(json.dumps(resultado, ensure_ascii=False))
         if resultado.get("errores"):
             raise CommandError("Quedaron operaciones pendientes. Revise el registro; se reintentarán en la siguiente ejecución.")

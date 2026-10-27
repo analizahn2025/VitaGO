@@ -223,11 +223,20 @@ def registrar_ubicaciones(usuario, datos_validados):
             repartidor=repartidor, id_cliente__in=identificadores,
         )
     }
-    return {
+    resultado = {
         "recibidos": len(registros),
         "creados": len(nuevos),
         "repetidos": len(registros) - len(nuevos),
         "registros": [
             guardados[identificador] for identificador in identificadores
         ],
+        "llegadas_detectadas": [],
     }
+    # También se evalúan reintentos idénticos: permiten recuperar una detección
+    # que falló transitoriamente sin duplicar puntos ni eventos. Nunca se
+    # bloquea una solicitud mientras se mantiene el bloqueo de recepción GPS.
+    from apps.seguimiento.llegadas import programar_deteccion_llegada
+    from apps.solicitudes.flujo_automatico import programar_avance_automatico
+    programar_avance_automatico(repartidor.pk)
+    programar_deteccion_llegada(usuario, repartidor.id, jornada.id, resultado)
+    return resultado

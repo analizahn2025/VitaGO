@@ -301,9 +301,10 @@ class PruebasProveedorGoogle(SimpleTestCase):
     def test_cuerpo_mascara_motocicleta_y_respuesta(self, abrir):
         abrir.return_value.__enter__.return_value.read.return_value = json.dumps({"routes": [{
             "distanceMeters": 1800, "duration": "250.5s", "polyline": {"encodedPolyline": RESULTADO["polilinea_codificada"]},
+            "legs": [{"polyline": {"encodedPolyline": RESULTADO["polilinea_codificada"]}}],
         }]}).encode()
         resultado = calcular_ruta_google(self.origen, self.destinos)
-        self.assertEqual(resultado, RESULTADO)
+        self.assertEqual(resultado, {**RESULTADO, "polilineas_tramos": [RESULTADO["polilinea_codificada"]]})
         solicitud = abrir.call_args.args[0]
         cuerpo = json.loads(solicitud.data)
         self.assertEqual(cuerpo["travelMode"], "TWO_WHEELER")

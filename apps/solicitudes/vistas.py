@@ -15,8 +15,8 @@ from apps.solicitudes.selectores import (
     listar_solicitudes_autorizadas,
     listar_tipos_servicio_autorizados,
     obtener_opciones_creacion_solicitud,
+    obtener_resumen_solicitante_autorizado,
     obtener_solicitud_autorizada,
-    resumir_solicitudes_autorizadas,
 )
 from apps.solicitudes.serializadores import (
     SerializadorAsignacionManualSolicitud,
@@ -25,11 +25,13 @@ from apps.solicitudes.serializadores import (
     SerializadorConsultaResumenSolicitante,
     SerializadorConsultaSolicitudes,
     SerializadorCreacionSolicitud,
+    SerializadorEntregaResumenDiario,
     SerializadorSolicitudDetalle,
     SerializadorSolicitudResumen,
     SerializadorTipoServicio,
     SerializadorTransicionSolicitud,
     SerializadorPuntoCreacionSolicitud,
+    SerializadorActualizacionTubos,
 )
 from apps.solicitudes.servicios import (
     asignar_solicitud_manualmente,
@@ -98,15 +100,19 @@ class VistaResumenSolicitante(APIView):
             data=request.query_params
         )
         entrada.is_valid(raise_exception=True)
-        conteos, recientes = resumir_solicitudes_autorizadas(
+        resumen = obtener_resumen_solicitante_autorizado(
             request.user,
             entrada.validated_data,
         )
         return Response(
             {
-                **conteos,
+                **resumen,
                 "recientes": SerializadorSolicitudResumen(
-                    recientes,
+                    resumen["recientes"],
+                    many=True,
+                ).data,
+                "entregas_recientes_del_dia": SerializadorEntregaResumenDiario(
+                    resumen["entregas_recientes_del_dia"],
                     many=True,
                 ).data,
             },
@@ -133,8 +139,7 @@ class VistaListaCreacionSolicitudes(APIView):
         entrada = SerializadorCreacionSolicitud(data=request.data)
         entrada.is_valid(raise_exception=True)
         solicitud = crear_solicitud(request.user, entrada.validated_data)
-        if solicitud.estado == EstadoSolicitud.PENDIENTE:
-            solicitud.refresh_from_db()
+        solicitud.refresh_from_db()
         return Response(
             SerializadorSolicitudDetalle(solicitud).data,
             status=HTTP_201_CREATED,
@@ -173,6 +178,17 @@ class VistaDetalleSolicitud(APIView):
         )
 
 
+class VistaCantidadTubosSolicitud(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def patch(self, request, solicitud_id):
+        from apps.solicitudes.carga import actualizar_cantidad_tubos
+        entrada = SerializadorActualizacionTubos(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        solicitud = actualizar_cantidad_tubos(request.user, solicitud_id, entrada.validated_data)
+        return Response(SerializadorSolicitudDetalle(solicitud).data)
+
+
 class VistaAsignacionSolicitud(APIView):
     permission_classes = (IsAuthenticated,)
 
@@ -184,6 +200,7 @@ class VistaAsignacionSolicitud(APIView):
             solicitud_id,
             entrada.validated_data,
         )
+        solicitud.refresh_from_db()
         return Response(
             SerializadorSolicitudDetalle(solicitud).data,
             status=HTTP_201_CREATED,

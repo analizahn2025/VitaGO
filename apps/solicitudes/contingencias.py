@@ -1,4 +1,4 @@
-"""Suspensiones y cierre del día corporativo, con trazabilidad e idempotencia."""
+"""Pérdida de habilitación y cierre corporativo, con trazabilidad e idempotencia."""
 
 import logging
 from datetime import timedelta
@@ -11,6 +11,8 @@ from django.utils import timezone
 from apps.jornadas.models import JornadaRepartidor
 from apps.notificaciones.models import NotificacionUsuario
 from apps.repartidores.models import Repartidor
+from apps.repartidores.habilitacion import anotar_rol_operativo, tiene_rol_operativo_repartidor
+from apps.repartidores.operacion import registrar_operacion_repartidor
 from apps.solicitudes.models import AsignacionSolicitud, EventoSolicitud, MovimientoEnvioEspecial, Solicitud
 from apps.solicitudes.opciones import (
     ESTADOS_SOLICITUD_ACTIVOS, EstadoAsignacionSolicitud, EstadoMovimientoEnvioEspecial,
@@ -61,7 +63,7 @@ def cerrar_solicitud_vencida(solicitud_id, ahora=None):
     if settings.MODO_APLICACION != "CORPORATIVO":
         return False
     ahora = ahora or timezone.now()
-    solicitud = Solicitud.objects.select_for_update(of=("self",)).select_related("empresa__pais").get(pk=solicitud_id)
+    solicitud = Solicitud.objects.select_for_update(of=("self",), no_key=True).select_related("empresa__pais").get(pk=solicitud_id)
     if solicitud.estado not in ESTADOS_ABIERTOS:
         return False
     corte = limite_dia_operativo(solicitud.creado_en, solicitud.empresa)
@@ -98,21 +100,30 @@ def retirar_servicio_por_suspension(solicitud_id, usuario_administrador=None, ah
     if settings.MODO_APLICACION != "CORPORATIVO":
         return False
     ahora = ahora or timezone.now()
-    solicitud = Solicitud.objects.select_for_update(of=("self",)).select_related("empresa__pais").get(pk=solicitud_id)
+    solicitud = Solicitud.objects.select_for_update(of=("self",), no_key=True).select_related("empresa__pais").get(pk=solicitud_id)
     if solicitud.estado not in ESTADOS_SOLICITUD_ACTIVOS or not solicitud.repartidor_asignado_id:
         return False
     if ahora >= limite_dia_operativo(solicitud.creado_en, solicitud.empresa):
         return cerrar_solicitud_vencida(solicitud.pk, ahora)
     repartidor = Repartidor.objects.select_for_update(of=("self",)).select_related("usuario").get(pk=solicitud.repartidor_asignado_id)
-    # Se revalida dentro del bloqueo: una recuperación de cuenta no retira servicios.
+    # Revalidar dentro del bloqueo: otra asignación válida o una recuperación
+    # previa al callback no deben retirar servicios. No bloquear al usuario aquí.
     from apps.usuarios.models import Usuario
-    if Usuario.objetos.filter(pk=repartidor.usuario_id, estado=EstadoUsuario.ACTIVO).exists():
+    usuario_activo = Usuario.objetos.filter(pk=repartidor.usuario_id, estado=EstadoUsuario.ACTIVO).exists()
+    if usuario_activo and tiene_rol_operativo_repartidor(repartidor):
         return False
+    causa = "ROL_OPERATIVO_NO_VIGENTE" if usuario_activo else "USUARIO_NO_ACTIVO"
+    motivo_retiro = (
+        "Retirada por pérdida del rol operativo del usuario."
+        if usuario_activo else "Retirada por suspensión o desactivación del usuario."
+    )
     asignacion = AsignacionSolicitud.objects.select_for_update().get(solicitud=solicitud, estado=EstadoAsignacionSolicitud.ACTIVA)
+    # SUSPENSION representa la interrupción de habilitación (estado o rol) y
+    # conserva el motivo admitido por la restricción de tramos sin GPS final.
     cerrar_tramo_interrumpido(solicitud, repartidor, ahora, "SUSPENSION")
     asignacion.estado = EstadoAsignacionSolicitud.REASIGNADA
     asignacion.finalizada_en = ahora
-    asignacion.motivo = "Retirada por suspensión o desactivación del usuario."
+    asignacion.motivo = motivo_retiro
     asignacion.save(update_fields=("estado", "finalizada_en", "motivo", "actualizado_en"))
     estado_anterior = solicitud.estado
     solicitud.repartidor_asignado = None
@@ -124,7 +135,7 @@ def retirar_servicio_por_suspension(solicitud_id, usuario_administrador=None, ah
     evento = EventoSolicitud.objects.create(
         solicitud=solicitud, tipo=TipoEventoSolicitud.REASIGNACION_PENDIENTE,
         realizado_por=usuario_administrador, repartidor=repartidor,
-        metadatos={"motivo": "SUSPENSION", "estado_anterior": estado_anterior,
+        metadatos={"motivo": "SUSPENSION", "causa": causa, "estado_anterior": estado_anterior,
                    "repartidor_anterior_id": str(repartidor.pk),
                    "traspaso_fisico_fuera_app": estado_anterior in ESTADOS_CON_PAQUETE},
     )
@@ -132,19 +143,19 @@ def retirar_servicio_por_suspension(solicitud_id, usuario_administrador=None, ah
                f"La solicitud {solicitud.numero} requiere otro motorista. El traspaso físico se coordina fuera de la app.",
                [solicitud.solicitada_por_id, getattr(usuario_administrador, "pk", None), repartidor.usuario_id])
     from apps.repartidores.capacidad import sincronizar_capacidad_repartidor
-    from apps.solicitudes.servicios import _registrar_cambio_operativo_repartidor, programar_reintento_pendientes
+    from apps.solicitudes.servicios import programar_reintento_pendientes
     from apps.rutas.models import VersionRuta
     from apps.rutas.servicios import sincronizar_ruta
-    sincronizar_capacidad_repartidor(repartidor, usuario_administrador, "Retirada por suspensión.")
-    _registrar_cambio_operativo_repartidor(repartidor, usuario_administrador,
-        estado_nuevo="OUT_OF_SERVICE", motivo="Usuario suspendido o inactivo.")
+    sincronizar_capacidad_repartidor(repartidor, usuario_administrador, motivo_retiro)
+    registrar_operacion_repartidor(repartidor, usuario_administrador,
+        estado_nuevo="OUT_OF_SERVICE", motivo=motivo_retiro)
     sincronizar_ruta(repartidor, VersionRuta.Motivo.REASIGNACION)
     programar_reintento_pendientes(solicitud.empresa_id)
     return True
 
 
 def procesar_suspension(usuario_id, usuario_administrador=None):
-    """Corre después del commit; no introduce inversión usuario → motorista."""
+    """Recupera pérdida de estado o rol después del commit, sin usuario → motorista."""
     if settings.MODO_APLICACION != "CORPORATIVO":
         return 0
     ids = list(Solicitud.objects.filter(repartidor_asignado__usuario_id=usuario_id,
@@ -160,7 +171,7 @@ def programar_suspension(usuario_id, administrador):
             procesar_suspension(usuario_id, administrador)
         except Exception:
             # La tarea local recupera también contingencias interrumpidas.
-            registro.exception("Pendiente recuperar servicios de un motorista suspendido: %s", usuario_id)
+            registro.exception("Pendiente recuperar servicios de un motorista sin habilitación: %s", usuario_id)
     transaction.on_commit(despues_del_commit)
 
 
@@ -177,19 +188,17 @@ def cerrar_jornada_vencida(jornada_id, ahora=None):
     corte = limite_dia_operativo(jornada.iniciada_en, previa.repartidor.empresa)
     if ahora < corte or AsignacionSolicitud.objects.filter(repartidor=repartidor, estado=EstadoAsignacionSolicitud.ACTIVA).exists():
         return False
-    from apps.jornadas.servicios import _calcular_resumen, _registrar_estado_repartidor
-    resumen = _calcular_resumen(jornada, corte)
-    jornada.estado = "FINALIZADA"
-    jornada.finalizada_en = corte
-    for campo, valor in resumen.items():
-        setattr(jornada, campo, valor)
-    jornada.save(update_fields=("estado", "finalizada_en", *resumen.keys(), "actualizado_en"))
-    from apps.seguimiento.sincronizacion import consolidar_jornada
-    consolidar_jornada(jornada, None, "FIN_DIA")
-    _registrar_estado_repartidor(repartidor, None, estado_nuevo="OFFLINE", motivo="Fin del día operativo.")
-    from apps.rutas.models import VersionRuta
-    from apps.rutas.servicios import sincronizar_ruta
-    sincronizar_ruta(repartidor, VersionRuta.Motivo.CIERRE_JORNADA, cerrar=True, finalizada_en=corte)
+    from apps.jornadas.servicios import registrar_cierre_jornada
+
+    registrar_cierre_jornada(
+        jornada,
+        repartidor,
+        None,
+        finalizada_en=corte,
+        motivo_medicion="FIN_DIA",
+        motivo_estado="Fin del día operativo.",
+        finalizada_ruta_en=corte,
+    )
     return True
 
 
@@ -228,9 +237,13 @@ def procesar_cierre_diario(ahora=None):
             iniciada_en__lt=inicio_hoy).values_list("pk", flat=True)
         for pk in jornadas.iterator(chunk_size=200):
             procesar_unidad("jornadas_cerradas", cerrar_jornada_vencida, pk, ahora)
-    suspendidos = Solicitud.objects.filter(estado__in=ESTADOS_SOLICITUD_ACTIVOS).exclude(
-        repartidor_asignado__usuario__estado=EstadoUsuario.ACTIVO,
-    ).exclude(repartidor_asignado__isnull=True).order_by().values_list("repartidor_asignado__usuario_id", flat=True).distinct()
+    sin_habilitacion = anotar_rol_operativo(Repartidor.objects.all()).exclude(
+        usuario__estado=EstadoUsuario.ACTIVO, tiene_rol_operativo_vigente=True,
+    )
+    suspendidos = Solicitud.objects.filter(
+        estado__in=ESTADOS_SOLICITUD_ACTIVOS,
+        repartidor_asignado__in=sin_habilitacion,
+    ).order_by().values_list("repartidor_asignado__usuario_id", flat=True).distinct()
     for usuario_id in suspendidos:
         procesar_unidad("servicios_retirados", procesar_suspension, usuario_id)
     return resultado

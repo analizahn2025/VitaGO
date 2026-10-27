@@ -86,7 +86,7 @@ class PruebasContingenciasCorporativas(TestCase):
         anterior = self._asignar(EstadoSolicitud.EN_RECOLECCION)
         self._suspender()
         self.assertEqual(self.solicitud.repartidor_asignado_id, self.nuevo.pk)
-        self.assertEqual(self.solicitud.estado, EstadoSolicitud.ASIGNADA)
+        self.assertEqual(self.solicitud.estado, EstadoSolicitud.HACIA_RECOLECCION)
         self.assertFalse(self.solicitud.reasignacion_pendiente)
         anterior.refresh_from_db()
         self.assertEqual(anterior.estado, "REASIGNADA")
@@ -244,10 +244,26 @@ class PruebasContingenciasCorporativas(TestCase):
         with self.assertRaises(CommandError):
             call_command("cerrar_operaciones_vencidas", stdout=StringIO())
 
+    def test_comando_sin_consola_registra_resultado_y_no_falla_por_stdout(self):
+        resultado = {"solicitudes_cerradas": 0, "servicios_retirados": 0, "jornadas_cerradas": 0}
+        with patch("apps.solicitudes.management.commands.cerrar_operaciones_vencidas.procesar_cierre_diario", return_value=resultado) as procesar:
+            with patch("apps.solicitudes.management.commands.cerrar_operaciones_vencidas.logging.getLogger") as obtener_logger:
+                with patch("sys.stdout", None), patch("sys.stderr", None):
+                    call_command("cerrar_operaciones_vencidas", confirmar_corporativo=True, skip_checks=True)
+        procesar.assert_called_once_with()
+        obtener_logger.return_value.info.assert_called_once()
+
+    def test_comando_sin_consola_conserva_error_si_hubo_fallos_operativos(self):
+        with patch("apps.solicitudes.management.commands.cerrar_operaciones_vencidas.procesar_cierre_diario", return_value={"errores": 1}):
+            with patch("apps.solicitudes.management.commands.cerrar_operaciones_vencidas.logging.getLogger"):
+                with patch("sys.stdout", None), patch("sys.stderr", None):
+                    with self.assertRaises(CommandError):
+                        call_command("cerrar_operaciones_vencidas", confirmar_corporativo=True, skip_checks=True)
+
     def test_reemplazo_lleno_no_recibe_una_sexta_solicitud(self):
         self._asignar()
         for indice in range(5):
-            Solicitud.objects.create(numero=f"LLENO-{indice}", empresa=self.empresa,
+            Solicitud.objects.create(cantidad_tubos=1, numero=f"LLENO-{indice}", empresa=self.empresa,
                 solicitada_por=self.administrador, repartidor_asignado=self.nuevo,
                 origen=self.origen, destino=self.destino, prioridad="NORMAL", estado="ASSIGNED")
         self._suspender()
@@ -257,7 +273,7 @@ class PruebasContingenciasCorporativas(TestCase):
 
     def test_reemplazo_con_prioritario_no_recibe_contingencia(self):
         self._asignar()
-        Solicitud.objects.create(numero="PRIORITARIO-ACTIVO", empresa=self.empresa,
+        Solicitud.objects.create(cantidad_tubos=1, numero="PRIORITARIO-ACTIVO", empresa=self.empresa,
             solicitada_por=self.administrador, repartidor_asignado=self.nuevo,
             origen=self.origen, destino=self.destino, prioridad="PRIORITY", estado="IN_TRANSIT")
         self._suspender()
@@ -362,7 +378,7 @@ class PruebasContingenciasCorporativas(TestCase):
 
     def test_reintento_cierra_vencida_y_continua_con_la_vigente(self):
         self._vencer()
-        vigente = Solicitud.objects.create(numero="VIGENTE-REINTENTO", empresa=self.empresa,
+        vigente = Solicitud.objects.create(cantidad_tubos=1, numero="VIGENTE-REINTENTO", empresa=self.empresa,
             solicitada_por=self.administrador, origen=self.origen, destino=self.destino, prioridad="NORMAL")
         self.assertEqual(reintentar_solicitudes_pendientes(self.empresa.pk), 1)
         self.solicitud.refresh_from_db()
@@ -394,7 +410,7 @@ class PruebasContingenciasCorporativas(TestCase):
 
     def test_un_cierre_fallido_no_impide_cerrar_los_demas(self):
         self._vencer()
-        otra = Solicitud.objects.create(numero="SEGUNDA-VENCIDA", empresa=self.empresa,
+        otra = Solicitud.objects.create(cantidad_tubos=1, numero="SEGUNDA-VENCIDA", empresa=self.empresa,
             solicitada_por=self.administrador, origen=self.origen, destino=self.destino, prioridad="NORMAL")
         Solicitud.objects.filter(pk=otra.pk).update(creado_en=self.solicitud.creado_en)
         original = cerrar_solicitud_vencida

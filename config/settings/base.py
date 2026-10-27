@@ -3,6 +3,7 @@
 import os
 from datetime import timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import environ
 from django.core.exceptions import ImproperlyConfigured
@@ -70,6 +71,8 @@ if (
 SECRET_KEY = env.str("CLAVE_SECRETA", default="")
 DEBUG = env.bool("DEPURACION", default=False)
 ALLOWED_HOSTS = env.list("SERVIDORES_PERMITIDOS", default=[])
+DEFAULT_EXCEPTION_REPORTER_FILTER = "apps.nucleo.seguridad.FiltroInformeErroresSeguro"
+DEFAULT_EXCEPTION_REPORTER = "apps.nucleo.seguridad.InformeErroresSeguro"
 
 FUNCIONALIDADES = Funcionalidades(
     tarifas=env.bool("FUNCIONALIDAD_TARIFAS", default=False),
@@ -110,6 +113,7 @@ INSTALLED_APPS = [
 
 MIDDLEWARE = [
     "apps.nucleo.middleware.MiddlewareRendimientoAPI",
+    "apps.nucleo.seguridad.MiddlewareErroresSegurosAPI",
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -152,13 +156,21 @@ INTERVALO_GPS_MAXIMO_SEGUNDOS = env.int("INTERVALO_GPS_MAXIMO_SEGUNDOS", default
 DESPLAZAMIENTO_GPS_MINIMO_METROS = env.float("DESPLAZAMIENTO_GPS_MINIMO_METROS", default=5)
 COBERTURA_GPS_MINIMA_PORCENTAJE = env.float("COBERTURA_GPS_MINIMA_PORCENTAJE", default=90)
 INTERVALO_GPS_CAPTURA_MOVIMIENTO_SEGUNDOS = env.int("INTERVALO_GPS_CAPTURA_MOVIMIENTO_SEGUNDOS", default=5)
-INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS = env.int("INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS", default=30)
+INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS = env.int("INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS", default=15)
 INTERVALO_GPS_ENVIO_SEGUNDOS = env.int("INTERVALO_GPS_ENVIO_SEGUNDOS", default=20)
+LLEGADAS_AUTOMATICAS_HABILITADAS = env.bool("LLEGADAS_AUTOMATICAS_HABILITADAS", default=True)
+RADIO_LLEGADA_METROS = env.float("RADIO_LLEGADA_METROS", default=50)
+PERMANENCIA_LLEGADA_SEGUNDOS = env.int("PERMANENCIA_LLEGADA_SEGUNDOS", default=10)
+MINIMO_PUNTOS_LLEGADA = env.int("MINIMO_PUNTOS_LLEGADA", default=3)
+PRECISION_LLEGADA_MAXIMA_METROS = env.float("PRECISION_LLEGADA_MAXIMA_METROS", default=20)
+ANTIGUEDAD_LLEGADA_MAXIMA_SEGUNDOS = env.int("ANTIGUEDAD_LLEGADA_MAXIMA_SEGUNDOS", default=30)
 for nombre in (
     "ANTIGUEDAD_GPS_ASIGNACION_SEGUNDOS", "PRECISION_GPS_ASIGNACION_METROS",
     "INTERVALO_GPS_MAXIMO_SEGUNDOS", "DESPLAZAMIENTO_GPS_MINIMO_METROS",
     "INTERVALO_GPS_CAPTURA_MOVIMIENTO_SEGUNDOS", "INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS",
     "INTERVALO_GPS_ENVIO_SEGUNDOS",
+    "RADIO_LLEGADA_METROS", "PERMANENCIA_LLEGADA_SEGUNDOS",
+    "PRECISION_LLEGADA_MAXIMA_METROS", "ANTIGUEDAD_LLEGADA_MAXIMA_SEGUNDOS",
 ):
     if globals()[nombre] <= 0:
         raise ImproperlyConfigured(f"{nombre} debe ser mayor que cero.")
@@ -166,6 +178,10 @@ if not 0 < COBERTURA_GPS_MINIMA_PORCENTAJE <= 100:
     raise ImproperlyConfigured("COBERTURA_GPS_MINIMA_PORCENTAJE debe estar entre 0 y 100.")
 if INTERVALO_GPS_CAPTURA_MOVIMIENTO_SEGUNDOS > INTERVALO_GPS_MAXIMO_SEGUNDOS or INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS > INTERVALO_GPS_MAXIMO_SEGUNDOS:
     raise ImproperlyConfigured("Los intervalos de captura GPS no pueden superar INTERVALO_GPS_MAXIMO_SEGUNDOS.")
+if not 3 <= MINIMO_PUNTOS_LLEGADA <= 60:
+    raise ImproperlyConfigured("MINIMO_PUNTOS_LLEGADA debe estar entre 3 y 60.")
+if PERMANENCIA_LLEGADA_SEGUNDOS > 120:
+    raise ImproperlyConfigured("PERMANENCIA_LLEGADA_SEGUNDOS no puede superar la ventana de 120 segundos.")
 
 ROOT_URLCONF = "config.urls"
 
@@ -244,6 +260,15 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = env.str("CODIGO_IDIOMA", default="es")
 TIME_ZONE = env.str("ZONA_HORARIA_PREDETERMINADA", default="UTC")
+ZONA_HORARIA_RESUMEN_SOLICITANTE = env.str(
+    "ZONA_HORARIA_RESUMEN_SOLICITANTE", default="America/Tegucigalpa"
+).strip()
+try:
+    ZoneInfo(ZONA_HORARIA_RESUMEN_SOLICITANTE)
+except (ValueError, ZoneInfoNotFoundError) as error:
+    raise ImproperlyConfigured(
+        "ZONA_HORARIA_RESUMEN_SOLICITANTE debe ser una zona horaria IANA válida."
+    ) from error
 USE_I18N = True
 USE_TZ = True
 

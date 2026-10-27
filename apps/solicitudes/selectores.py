@@ -1,13 +1,18 @@
 """Consultas autorizadas y optimizadas del dominio de solicitudes."""
 
+from datetime import datetime, time, timedelta
+from zoneinfo import ZoneInfo
+
 from django.conf import settings
 from django.db.models import Count, F, Q
 from django.http import Http404
+from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 
 from apps.organizaciones.models import Empresa, Sucursal
 from apps.organizaciones.opciones import EstadoOrganizacion
 from apps.solicitudes.excepciones import CreacionSolicitudNoDisponible
+from apps.solicitudes.cobertura import comparten_departamento, departamento_normalizado
 from apps.solicitudes.models import Solicitud, TipoServicio
 from apps.solicitudes.opciones import EstadoSolicitud, ModalidadSolicitud
 from apps.ubicaciones.models import UbicacionEmpresa
@@ -199,17 +204,17 @@ def obtener_opciones_creacion_solicitud(usuario, filtros):
             )
         if origen is not None:
             ubicacion_origen_id = origen["ubicacion"].id
-            ciudad = (origen["ubicacion"].localidad or "").strip()
+            departamento = departamento_normalizado(origen["ubicacion"])
         else:
             ubicacion_origen_id = None
-            ciudad = ""
-        if ciudad:
+            departamento = ""
+        if departamento:
             sucursales_destino = (
                 Sucursal.objects.filter(
                     empresa=empresa,
                     estado=EstadoOrganizacion.ACTIVO,
                     ubicacion__estado=EstadoUbicacion.ACTIVO,
-                    ubicacion__localidad__iexact=ciudad,
+                    ubicacion__pais_id=origen["ubicacion"].pais_id,
                     ubicacion__empresas_autorizadas__empresa=empresa,
                     ubicacion__empresas_autorizadas__estado=(
                         EstadoUbicacionEmpresa.APROBADO
@@ -221,14 +226,24 @@ def obtener_opciones_creacion_solicitud(usuario, filtros):
                 .distinct()
                 .order_by("nombre", "id")
             )
-            destinos = _convertir_sucursales_en_puntos(sucursales_destino)
+            # Mismo comparador que el alta: los campos administrativos son texto
+            # y pueden contener espacios/capitalización/Unicode equivalentes.
+            destinos = _convertir_sucursales_en_puntos(
+                sucursal for sucursal in sucursales_destino
+                if comparten_departamento(origen["ubicacion"], sucursal.ubicacion)
+            )
         if not origenes:
             mensaje_disponibilidad = (
                 "No hay sucursales disponibles para crear solicitudes."
             )
+        elif origen is not None and not departamento:
+            mensaje_disponibilidad = (
+                "La sucursal de origen no tiene departamento registrado. "
+                "Solicite su actualización al administrador."
+            )
         elif origen is not None and not destinos:
             mensaje_disponibilidad = (
-                "No hay sucursales de destino disponibles en la misma ciudad."
+                "No hay sucursales de destino disponibles en el mismo departamento."
             )
     elif modalidad == ModalidadSolicitud.EMPRESA_TRANSPORTE:
         relaciones = (
@@ -367,8 +382,7 @@ def agrupar_solicitudes_autorizadas(usuario, por, filtros=None):
     raise ValueError("La agrupación solicitada no es válida.")
 
 
-def resumir_solicitudes_autorizadas(usuario, filtros=None):
-    consulta = listar_solicitudes_autorizadas(usuario, filtros)
+def _resumir_consulta_solicitudes(consulta):
     pendientes = (EstadoSolicitud.PENDIENTE, EstadoSolicitud.ASIGNADA)
     activas = (
         EstadoSolicitud.HACIA_RECOLECCION,
@@ -410,6 +424,45 @@ def resumir_solicitudes_autorizadas(usuario, filtros=None):
         ),
     )
     return conteos, consulta[:5]
+
+
+def resumir_solicitudes_autorizadas(usuario, filtros=None):
+    consulta = listar_solicitudes_autorizadas(usuario, filtros)
+    return _resumir_consulta_solicitudes(consulta)
+
+
+def obtener_resumen_solicitante_autorizado(usuario, filtros=None):
+    """Conserva acumulados y agrega entregas del día operativo solicitado."""
+    filtros = filtros or {}
+    consulta = listar_solicitudes_autorizadas(usuario, filtros)
+    conteos, recientes = _resumir_consulta_solicitudes(consulta)
+    zona = ZoneInfo(
+        getattr(
+            settings,
+            "ZONA_HORARIA_RESUMEN_SOLICITANTE",
+            "America/Tegucigalpa",
+        )
+    )
+    fecha = filtros.get("fecha_operativa")
+    if fecha is None:
+        fecha = timezone.localdate(timezone.now(), timezone=zona)
+    inicio = datetime.combine(fecha, time.min, tzinfo=zona)
+    siguiente = datetime.combine(fecha + timedelta(days=1), time.min, tzinfo=zona)
+    entregas_del_dia = consulta.filter(
+        estado=EstadoSolicitud.ENTREGADA,
+        entregada_en__gte=inicio,
+        entregada_en__lt=siguiente,
+    )
+    return {
+        **conteos,
+        "recientes": recientes,
+        "fecha_operativa": fecha.isoformat(),
+        "zona_horaria_operativa": zona.key,
+        "entregadas_del_dia": entregas_del_dia.count(),
+        "entregas_recientes_del_dia": entregas_del_dia.order_by(
+            "-entregada_en", "-id"
+        )[:5],
+    }
 
 
 def obtener_solicitud_autorizada(usuario, identificador_solicitud):

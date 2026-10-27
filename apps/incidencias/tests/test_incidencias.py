@@ -1,7 +1,9 @@
 import tempfile
 import uuid
+from contextlib import nullcontext
 from datetime import timedelta
 from decimal import Decimal
+from unittest.mock import patch
 
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -20,6 +22,7 @@ from apps.incidencias.opciones import EstadoIncidencia, TipoEventoIncidencia
 from apps.incidencias.selectores import listar_incidencias_autorizadas
 from apps.incidencias.servicios import (
     crear_incidencia,
+    registrar_evidencia_incidencia,
     revisar_incidencia,
 )
 from apps.jornadas.models import JornadaRepartidor
@@ -171,6 +174,7 @@ class PruebasIncidencias(TestCase):
 
     def _crear_solicitud_asignada(self):
         solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=f"SOL-INC-{uuid.uuid4().hex[:8]}",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -208,6 +212,7 @@ class PruebasIncidencias(TestCase):
 
     def test_solicitud_relacionada_debe_pertenecer_al_motorista(self):
         solicitud = Solicitud.objects.create(
+            cantidad_tubos=1,
             numero=f"SOL-AJENA-{uuid.uuid4().hex[:8]}",
             empresa=self.empresa,
             solicitada_por=self.administrador,
@@ -223,6 +228,86 @@ class PruebasIncidencias(TestCase):
                 self.repartidor.usuario,
                 self._datos(solicitud_id=solicitud.id),
             )
+
+    def test_api_reportada_en_es_del_servidor_aunque_el_cliente_cambie_reloj(self):
+        ahora = timezone.now()
+        cliente = APIClient()
+        cliente.force_authenticate(self.repartidor.usuario)
+        for fecha in (None, "reloj-invalido", (ahora - timedelta(days=3650)).isoformat(),
+                      (ahora + timedelta(days=3650)).isoformat()):
+            datos = {"descripcion": "Reporte con hora oficial"}
+            if fecha is not None:
+                datos["reportada_en"] = fecha
+            with self.subTest(fecha=fecha), patch("apps.incidencias.servicios.timezone.now", return_value=ahora):
+                respuesta = cliente.post(reverse("incidencias:lista-creacion"), datos, format="json")
+                self.assertEqual(respuesta.status_code, 201, respuesta.data)
+                self.assertEqual(Incidencia.objects.get(pk=respuesta.data["id"]).reportada_en, ahora)
+
+    def test_fecha_cliente_no_recupera_asignacion_terminada_para_reportar(self):
+        solicitud = self._crear_solicitud_asignada()
+        AsignacionSolicitud.objects.filter(solicitud=solicitud).update(
+            estado="REASIGNADA", finalizada_en=self.ahora - timedelta(minutes=1),
+        )
+        with self.assertRaises(ValidationError) as error:
+            crear_incidencia(self.repartidor.usuario, self._datos(solicitud_id=solicitud.pk))
+        self.assertIn("solicitud_id", error.exception.detail)
+        self.assertFalse(Incidencia.objects.exists())
+
+    def test_corte_corporativo_se_valida_con_hora_servidor_sin_aplicarlo_a_network(self):
+        self.jornada.iniciada_en = self.ahora - timedelta(days=2)
+        self.jornada.save()
+        with self.assertRaises(ValidationError) as error:
+            crear_incidencia(self.repartidor.usuario, self._datos(reportada_en=self.jornada.iniciada_en))
+        self.assertIn("reportada_en", error.exception.detail)
+        with override_settings(MODO_APLICACION="EXTERNO"):
+            incidencia = crear_incidencia(self.repartidor.usuario, {"descripcion": "Reporte Network"})
+        self.assertGreaterEqual(incidencia.reportada_en, self.ahora)
+
+    def test_foto_incidencia_usa_hora_servidor_incluso_despues_de_cerrar_jornada(self):
+        incidencia = crear_incidencia(self.repartidor.usuario, self._datos())
+        ahora = timezone.now()
+        self.jornada.estado = "FINALIZADA"
+        self.jornada.finalizada_en = ahora - timedelta(seconds=1)
+        self.jornada.save()
+        cliente = APIClient()
+        cliente.force_authenticate(self.repartidor.usuario)
+        ruta = reverse("incidencias:evidencias", args=[incidencia.pk])
+        for fecha in (None, "fecha-invalida", (ahora - timedelta(days=3650)).isoformat(),
+                      (ahora + timedelta(days=3650)).isoformat()):
+            datos = {"archivo": crear_imagen_prueba(), "latitud": "14.075000", "longitud": "-87.190000"}
+            if fecha is not None:
+                datos["capturada_en"] = fecha
+            with self.subTest(fecha=fecha), patch("apps.incidencias.servicios.timezone.now", return_value=ahora):
+                respuesta = cliente.post(ruta, datos, format="multipart")
+                self.assertEqual(respuesta.status_code, 201, respuesta.data)
+                evidencia = EvidenciaIncidencia.objects.get(pk=respuesta.data["id"])
+                self.assertEqual(evidencia.capturada_en, ahora)
+                evento = EventoIncidencia.objects.get(metadatos__evidencia_id=str(evidencia.pk))
+                self.assertEqual(evento.metadatos["capturada_en"], ahora.isoformat())
+        revisar_incidencia(self.gerente_operaciones, incidencia.pk, {"estado": "CERRADA"})
+        respuesta = cliente.post(ruta, {"archivo": crear_imagen_prueba(), "latitud": "14.075000",
+            "longitud": "-87.190000", "capturada_en": self.ahora.isoformat()}, format="multipart")
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertEqual(EvidenciaIncidencia.objects.count(), 4)
+
+    def test_compensacion_incidencia_preserva_error_original_y_su_historial(self):
+        incidencia = crear_incidencia(self.repartidor.usuario, self._datos())
+        for fallo_limpieza in (None, OSError("Almacenamiento no disponible")):
+            original = RuntimeError("Fallo de auditoría")
+            with self.subTest(limpieza_falla=bool(fallo_limpieza)), \
+                 patch("apps.incidencias.servicios.default_storage.save", return_value="incidencias/nueva.png"), \
+                 patch("apps.evidencias.servicios.default_storage.delete", side_effect=fallo_limpieza) as eliminar, \
+                 patch("apps.incidencias.servicios.EventoIncidencia.objects.create", side_effect=original), \
+                 (self.assertLogs("vitago.api", level="ERROR") if fallo_limpieza else nullcontext()):
+                with self.assertRaises(RuntimeError) as error:
+                    registrar_evidencia_incidencia(self.repartidor.usuario, incidencia.pk, {
+                        "archivo": crear_imagen_prueba(), "latitud": self.origen.latitud,
+                        "longitud": self.origen.longitud,
+                    })
+                self.assertIs(error.exception, original)
+                eliminar.assert_called_once_with("incidencias/nueva.png")
+            self.assertFalse(EvidenciaIncidencia.objects.exists())
+            self.assertEqual(incidencia.eventos.count(), 1)
 
     def test_acepta_solicitud_asignada_en_el_momento_reportado(self):
         solicitud = self._crear_solicitud_asignada()
@@ -340,7 +425,10 @@ class PruebasIncidencias(TestCase):
         )
         self.assertEqual(respuesta_archivo.status_code, 200)
         self.assertEqual(respuesta_archivo["Cache-Control"], "private, no-store")
-        respuesta_archivo.close()
+        # El cliente de pruebas protege la conexión al consumir el stream.
+        contenido = b"".join(respuesta_archivo.streaming_content)
+        self.assertTrue(contenido.startswith(b"\x89PNG\r\n\x1a\n"))
+        self.assertTrue(respuesta_archivo.closed)
 
     def test_finalizar_jornada_congela_cantidad_de_incidencias(self):
         crear_incidencia(self.repartidor.usuario, self._datos())

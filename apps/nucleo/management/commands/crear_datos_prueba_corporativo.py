@@ -244,6 +244,7 @@ class Command(BaseCommand):
                 "prioridad": PrioridadSolicitud.NORMAL,
                 "modalidad": modalidad,
                 "tipo_servicio_id": tipo_servicio.id,
+                "cantidad_tubos": 1,
                 "origen_id": sucursal.ubicacion_id,
                 "destino_id": destino.id,
                 "notas": marca,

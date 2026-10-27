@@ -6,6 +6,7 @@ from rest_framework.views import APIView
 from apps.seguimiento.selectores import obtener_configuracion_gps, obtener_seguimiento_solicitud
 from apps.seguimiento.serializadores import (
     SerializadorLoteRegistrosUbicacion,
+    SerializadorLlegadaDetectada,
     SerializadorRegistroUbicacion,
     SerializadorSeguimientoSolicitud,
 )
@@ -24,6 +25,9 @@ class VistaRegistroUbicaciones(APIView):
                 "recibidos": resultado["recibidos"],
                 "creados": resultado["creados"],
                 "repetidos": resultado["repetidos"],
+                "llegadas_detectadas": SerializadorLlegadaDetectada(
+                    resultado["llegadas_detectadas"], many=True,
+                ).data,
                 "registros": SerializadorRegistroUbicacion(
                     resultado["registros"],
                     many=True,

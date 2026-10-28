@@ -6,6 +6,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.repartidores.capacidad import obtener_carga_tubos, sincronizar_capacidad_repartidor
 from apps.repartidores.models import Repartidor
+from apps.repartidores.limites import obtener_limites_repartidor
 from apps.solicitudes.models import EventoSolicitud, Solicitud
 from apps.solicitudes.opciones import ESTADOS_SOLICITUD_ACTIVOS, EstadoSolicitud, TipoEventoSolicitud
 from apps.usuarios.servicios import usuario_tiene_permiso
@@ -41,8 +42,9 @@ def actualizar_cantidad_tubos(usuario, identificador, datos):
     repartidor = None
     if solicitud.repartidor_asignado_id:
         repartidor = Repartidor.objects.select_for_update(of=("self",)).get(pk=solicitud.repartidor_asignado_id)
+        limites = obtener_limites_repartidor(repartidor, bloquear=True)
         carga = obtener_carga_tubos(repartidor)
-        if anterior is not None and carga["tubos_comprometidos"] - anterior + cantidad > repartidor.limite_tubos:
+        if anterior is not None and carga["tubos_comprometidos"] - anterior + cantidad > limites["limite_tubos"]:
             raise ValidationError({"cantidad_tubos": "La modificación supera el cupo de tubos del motorista."})
     solicitud.cantidad_tubos = cantidad
     solicitud.save(update_fields=("cantidad_tubos", "actualizado_en"))

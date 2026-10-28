@@ -14,7 +14,8 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.evidencias.models import EvidenciaSolicitud
 from apps.jornadas.models import JornadaRepartidor
-from apps.repartidores.capacidad import LIMITE_SOLICITUDES, calcular_capacidad, obtener_carga_tubos, puede_recibir_solicitudes
+from apps.repartidores.capacidad import calcular_capacidad, obtener_carga_tubos, puede_recibir_solicitudes
+from apps.repartidores.limites import obtener_limites_repartidor
 from apps.repartidores.models import Repartidor
 from apps.repartidores.selectores import listar_repartidores_autorizados
 from apps.solicitudes.models import AsignacionSolicitud, Solicitud
@@ -142,6 +143,7 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
         recogida, entrega = recogidas.get(r.pk, {}), entregadas.get(r.pk, {})
         km, temp = jornadas.get(r.pk, {}), temperaturas.get(r.pk, {})
         carga = obtener_carga_tubos(r)
+        limites = obtener_limites_repartidor(r)
         incompletas = carga["solicitudes_sin_cantidad_tubos"]
         resultados[r.pk] = {
             "solicitudes": {"asignadas": asignadas.get(r.pk, 0), "recolectadas": recogida.get("cantidad", 0),
@@ -160,10 +162,10 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
                 "lecturas_sin_temperatura": temp.get("registradas", 0) - temp.get("con_temperatura", 0),
                 "minima_c": _decimal(temp.get("minima")), "maxima_c": _decimal(temp.get("maxima")),
                 "promedio_c": _decimal(temp.get("promedio")), "ultimas_lecturas": ultimas[r.pk]},
-            "carga_actual": {**carga, "limite_tubos": r.limite_tubos, "limite_solicitudes": LIMITE_SOLICITUDES,
+            "carga_actual": {**carga, **limites,
                 "tubos_reservados": carga["tubos_comprometidos"] - carga["tubos_en_transporte"],
-                "tubos_disponibles": 0 if incompletas else max(0, r.limite_tubos - carga["tubos_comprometidos"]),
-                "capacidad": calcular_capacidad(carga["solicitudes_activas"], limite_tubos=r.limite_tubos, **carga),
+                "tubos_disponibles": 0 if incompletas else max(0, limites["limite_tubos"] - carga["tubos_comprometidos"]),
+                "capacidad": calcular_capacidad(carga["solicitudes_activas"], **limites, **carga),
                 "estado_operativo": r.estado_operativo, "puede_recibir_solicitudes": puede_recibir_solicitudes(r, carga["solicitudes_activas"], carga=carga)},
         }
     return resultados

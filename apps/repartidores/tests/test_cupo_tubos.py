@@ -6,10 +6,11 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 from rest_framework.test import APIClient
 
-from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
+from apps.repartidores.models import Repartidor
+from apps.organizaciones.models import HistorialLimitesMotoristas
+from apps.organizaciones.limites import configurar_limites_empresa
 from apps.repartidores.selectores import listar_repartidores_disponibles
 from apps.repartidores.serializadores import SerializadorRepartidor
-from apps.repartidores.servicios import configurar_limite_tubos
 from apps.solicitudes.carga import actualizar_cantidad_tubos
 from apps.solicitudes.excepciones import CupoTubosInsuficiente, LimiteSolicitudesRepartidor
 from apps.solicitudes.models import Solicitud
@@ -107,23 +108,23 @@ class PruebasCupoTubos(TestCase):
         self.assertEqual(self._perfil()["tubos_comprometidos"], 0)
         self.assertEqual(self._perfil(self.repartidores[1])["tubos_comprometidos"], 18)
 
-    def test_limite_es_por_motorista_y_queda_auditado(self):
+    def test_limite_es_por_empresa_y_queda_auditado(self):
         r = self.repartidores[0]
-        configurar_limite_tubos(self.administrador, r.pk, {"limite_tubos": 30})
+        configurar_limites_empresa(self.administrador, self.empresa.pk, {"limite_tubos": 30})
         self.assertEqual(self._perfil()["limite_tubos"], 30)
-        self.assertEqual(self._perfil(self.repartidores[1])["limite_tubos"], 20)
-        self.assertEqual(HistorialEstadoRepartidor.objects.get(repartidor=r).datos_adicionales["limite_tubos_nuevo"], 30)
+        self.assertEqual(self._perfil(self.repartidores[1])["limite_tubos"], 30)
+        self.assertEqual(HistorialLimitesMotoristas.objects.get(empresa=self.empresa).limites_nuevos["limite_tubos"], 30)
 
     def test_no_reduce_limite_por_debajo_de_reserva(self):
         self._asignar(18)
         with self.assertRaises(ValidationError) as error:
-            configurar_limite_tubos(self.administrador, self.repartidores[0].pk, {"limite_tubos": 17})
+            configurar_limites_empresa(self.administrador, self.empresa.pk, {"limite_tubos": 17})
         self.assertIn("limite_tubos", error.exception.detail)
 
     def test_motorista_no_configura_su_propio_limite(self):
         r = self.repartidores[0]
         with self.assertRaises(PermissionDenied):
-            configurar_limite_tubos(r.usuario, r.pk, {"limite_tubos": 99})
+            configurar_limites_empresa(r.usuario, self.empresa.pk, {"limite_tubos": 99})
 
     def test_historica_desconocida_bloquea_nuevas_hasta_regularizacion(self):
         solicitud = self._nueva(None, self.repartidores[0], "PICKED_UP")
@@ -143,6 +144,9 @@ class PruebasCupoTubos(TestCase):
     def test_api_rechaza_cantidad_invalida_y_devuelve_campos_de_carga(self):
         cliente = APIClient(); cliente.force_authenticate(self.administrador)
         respuesta = cliente.patch(reverse("repartidores:detalle", args=[self.repartidores[0].pk]), {"limite_tubos": 25}, format="json")
+        self.assertEqual(respuesta.status_code, 400)
+        self.assertIn("limite_tubos", respuesta.data)
+        respuesta = cliente.patch(reverse("organizaciones:limites-motoristas-empresa", args=[self.empresa.pk]), {"limite_tubos": 25}, format="json")
         self.assertEqual(respuesta.status_code, 200, respuesta.data)
         self.assertEqual(respuesta.data["limite_tubos"], 25)
         for valor in (0, -1, "abc", 1.5):

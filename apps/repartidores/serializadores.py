@@ -5,12 +5,12 @@ from rest_framework import serializers
 
 from apps.flota.serializadores import SerializadorVehiculo
 from apps.repartidores.capacidad import (
-    LIMITE_SOLICITUDES,
     calcular_capacidad,
     puede_recibir_solicitudes,
     obtener_carga_tubos,
 )
 from apps.repartidores.models import Repartidor
+from apps.repartidores.limites import obtener_limites_repartidor
 from apps.repartidores.opciones import (
     CapacidadRepartidor,
     EstadoOperativoRepartidor,
@@ -65,6 +65,7 @@ class SerializadorRepartidor(serializers.ModelSerializer):
     capacidad = serializers.SerializerMethodField()
     solicitudes_activas = serializers.SerializerMethodField()
     limite_solicitudes = serializers.SerializerMethodField()
+    limite_tubos = serializers.SerializerMethodField()
     puede_recibir_solicitudes = serializers.SerializerMethodField()
     tubos_comprometidos = serializers.SerializerMethodField()
     tubos_en_transporte = serializers.SerializerMethodField()
@@ -91,7 +92,14 @@ class SerializadorRepartidor(serializers.ModelSerializer):
 
     def get_tubos_disponibles(self, repartidor):
         carga = self._carga(repartidor)
-        return 0 if carga["solicitudes_sin_cantidad_tubos"] else max(0, repartidor.limite_tubos - carga["tubos_comprometidos"])
+        return 0 if carga["solicitudes_sin_cantidad_tubos"] else max(0, self._limites(repartidor)["limite_tubos"] - carga["tubos_comprometidos"])
+
+    def _limites(self, repartidor):
+        if not hasattr(self, "_limites_motoristas"):
+            self._limites_motoristas = {}
+        if repartidor.pk not in self._limites_motoristas:
+            self._limites_motoristas[repartidor.pk] = obtener_limites_repartidor(repartidor)
+        return self._limites_motoristas[repartidor.pk]
 
     def get_solicitudes_sin_cantidad_tubos(self, repartidor):
         return self._carga(repartidor)["solicitudes_sin_cantidad_tubos"]
@@ -100,13 +108,16 @@ class SerializadorRepartidor(serializers.ModelSerializer):
         return self._carga(repartidor)["solicitudes_activas"]
 
     def get_capacidad(self, repartidor):
-        return calcular_capacidad(self._cantidad(repartidor), limite_tubos=repartidor.limite_tubos, **self._carga(repartidor))
+        return calcular_capacidad(self._cantidad(repartidor), **self._limites(repartidor), **self._carga(repartidor))
 
     def get_solicitudes_activas(self, repartidor):
         return self._cantidad(repartidor)
 
-    def get_limite_solicitudes(self, _repartidor):
-        return LIMITE_SOLICITUDES
+    def get_limite_solicitudes(self, repartidor):
+        return self._limites(repartidor)["limite_solicitudes"]
+
+    def get_limite_tubos(self, repartidor):
+        return self._limites(repartidor)["limite_tubos"]
 
     def get_puede_recibir_solicitudes(self, repartidor):
         return puede_recibir_solicitudes(repartidor, self._cantidad(repartidor), carga=self._carga(repartidor))
@@ -147,11 +158,6 @@ class SerializadorConsultaRepartidores(serializers.Serializer):
         choices=CapacidadRepartidor.choices, required=False
     )
     activo = serializers.BooleanField(required=False)
-
-
-class SerializadorConfiguracionTubos(serializers.Serializer):
-    limite_tubos = serializers.IntegerField(min_value=1, max_value=2147483647)
-    motivo = serializers.CharField(required=False, allow_blank=True, max_length=1000)
 
 
 class SerializadorActualizacionOperacionRepartidor(serializers.Serializer):

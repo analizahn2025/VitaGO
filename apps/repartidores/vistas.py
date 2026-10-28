@@ -2,6 +2,7 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.status import HTTP_200_OK, HTTP_201_CREATED
 from rest_framework.views import APIView
+from rest_framework.exceptions import ValidationError
 from django.utils import timezone
 
 from apps.nucleo.paginacion import PaginacionEstandar
@@ -16,7 +17,6 @@ from apps.repartidores.serializadores import (
     SerializadorConsultaRepartidores,
     SerializadorCreacionRepartidor,
     SerializadorRepartidor,
-    SerializadorConfiguracionTubos,
     SerializadorConsultaResumenMotoristas,
     SerializadorResumenMotorista,
     SerializadorLecturaTemperaturaResumen,
@@ -24,7 +24,6 @@ from apps.repartidores.serializadores import (
 from apps.repartidores.servicios import (
     actualizar_operacion_repartidor,
     crear_repartidor,
-    configurar_limite_tubos,
 )
 from apps.repartidores.resumenes import (
     construir_resumenes, lecturas_temperatura, listar_motoristas_para_resumen,
@@ -129,10 +128,12 @@ class VistaDetalleRepartidor(APIView):
     permission_classes = (IsAuthenticated,)
 
     def patch(self, request, repartidor_id):
-        entrada = SerializadorConfiguracionTubos(data=request.data)
-        entrada.is_valid(raise_exception=True)
-        repartidor = configurar_limite_tubos(request.user, repartidor_id, entrada.validated_data)
-        return Response(SerializadorRepartidor(repartidor).data)
+        obtener_repartidor_autorizado(request.user, repartidor_id)
+        campos = {campo for campo in request.data if campo in {"limite_tubos", "limite_solicitudes"}}
+        raise ValidationError({
+            campo: "Los límites se configuran por empresa en Corporate y para toda la red en Network."
+            for campo in campos or {"detail"}
+        })
 
     def get(self, request, repartidor_id):
         repartidor = obtener_repartidor_autorizado(request.user, repartidor_id)

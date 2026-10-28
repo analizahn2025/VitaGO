@@ -1,8 +1,10 @@
-"""Serializadores de lectura para empresas y sucursales."""
+"""Contratos de empresas, sucursales y límites compartidos de motoristas."""
 
+from django.conf import settings
 from rest_framework import serializers
 
 from apps.organizaciones.models import Empresa, Sucursal
+from apps.repartidores.limites import limites_de_configuracion, obtener_configuracion_red
 
 
 class SerializadorPaisOrganizacion(serializers.Serializer):
@@ -13,8 +15,34 @@ class SerializadorPaisOrganizacion(serializers.Serializer):
     zona_horaria_predeterminada = serializers.CharField()
 
 
+class SerializadorLimitesMotoristas(serializers.Serializer):
+    limite_tubos = serializers.IntegerField(source="limite_tubos_por_motorista", read_only=True)
+    limite_solicitudes = serializers.IntegerField(source="limite_solicitudes_por_motorista", read_only=True)
+
+class SerializadorConfiguracionLimitesMotoristas(serializers.Serializer):
+    limite_tubos = serializers.IntegerField(min_value=1, max_value=2147483647, required=False)
+    limite_solicitudes = serializers.IntegerField(min_value=1, max_value=5, required=False)
+    motivo = serializers.CharField(max_length=1000, required=False, allow_blank=True)
+
+    def validate(self, atributos):
+        desconocidos = set(self.initial_data) - set(self.fields)
+        if desconocidos:
+            raise serializers.ValidationError({campo: "Campo no permitido." for campo in sorted(desconocidos)})
+        if not ({"limite_tubos", "limite_solicitudes"} & atributos.keys()):
+            raise serializers.ValidationError({"detail": "Debe indicar al menos un límite."})
+        return atributos
+
+
 class SerializadorEmpresa(serializers.ModelSerializer):
     pais = SerializadorPaisOrganizacion(read_only=True)
+    limites_motoristas = serializers.SerializerMethodField()
+
+    def get_limites_motoristas(self, empresa):
+        if settings.MODO_APLICACION == "EXTERNO":
+            if not hasattr(self, "_limites_red"):
+                self._limites_red = limites_de_configuracion(obtener_configuracion_red())
+            return {"alcance": "RED", **self._limites_red}
+        return {"alcance": "EMPRESA", **limites_de_configuracion(empresa)}
 
     class Meta:
         model = Empresa
@@ -27,6 +55,7 @@ class SerializadorEmpresa(serializers.ModelSerializer):
             "correo",
             "pais",
             "estado",
+            "limites_motoristas",
         )
 
 

@@ -14,11 +14,11 @@ class LimiteSolicitudesRepartidor(APIException):
     status_code = 409
     default_code = "limite_solicitudes_repartidor"
 
-    def __init__(self):
+    def __init__(self, limite=5):
         super().__init__(
             detail={
                 "repartidor_id": [
-                    "El motorista ya tiene cinco solicitudes activas."
+                    f"El motorista alcanzó el límite de {limite} solicitudes activas."
                 ]
             }
         )

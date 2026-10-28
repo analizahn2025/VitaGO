@@ -5,7 +5,6 @@ from django.http import Http404
 from rest_framework.exceptions import PermissionDenied
 
 from apps.repartidores.capacidad import (
-    LIMITE_SOLICITUDES,
     anotar_carga_repartidores,
     filtrar_repartidores_disponibles,
 )
@@ -41,7 +40,7 @@ def listar_repartidores_autorizados(usuario, filtros=None):
     if filtros.get("estado_operativo"):
         consulta = consulta.filter(estado_operativo=filtros["estado_operativo"])
     if filtros.get("capacidad"):
-        lleno = Q(solicitudes_activas_calculadas__gte=LIMITE_SOLICITUDES) | Q(tubos_comprometidos__gte=F("limite_tubos")) | Q(solicitudes_sin_cantidad_tubos__gt=0)
+        lleno = Q(solicitudes_activas_calculadas__gte=F("limite_solicitudes_efectivo")) | Q(tubos_comprometidos__gte=F("limite_tubos_efectivo")) | Q(solicitudes_sin_cantidad_tubos__gt=0)
         if filtros["capacidad"] == CapacidadRepartidor.VACIO:
             consulta = consulta.filter(solicitudes_activas_calculadas=0)
         elif filtros["capacidad"] == CapacidadRepartidor.LLENO:

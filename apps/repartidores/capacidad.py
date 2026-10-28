@@ -5,6 +5,7 @@ from django.db.models.functions import Coalesce
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
 from apps.repartidores.habilitacion import anotar_rol_operativo, tiene_rol_operativo_repartidor
+from apps.repartidores.limites import anotar_limites_repartidores, obtener_limites_repartidor
 from apps.repartidores.opciones import CapacidadRepartidor, EstadoOperativoRepartidor
 from apps.solicitudes.models import MovimientoEnvioEspecial, Solicitud
 from apps.solicitudes.opciones import (
@@ -16,7 +17,6 @@ from apps.solicitudes.opciones import (
 from apps.usuarios.opciones import EstadoUsuario
 
 
-LIMITE_SOLICITUDES = 5
 ESTADOS_PRIORITARIO_EXCLUSIVO = ESTADOS_SOLICITUD_ACTIVOS
 ESTADOS_CON_TUBOS_RECOGIDOS = (EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO)
 
@@ -40,10 +40,10 @@ def contar_solicitudes_activas(repartidor):
     ).count()
 
 
-def calcular_capacidad(cantidad, *, limite_tubos=20, tubos_comprometidos=0, solicitudes_sin_cantidad_tubos=0, **_):
+def calcular_capacidad(cantidad, *, limite_tubos=20, limite_solicitudes=5, tubos_comprometidos=0, solicitudes_sin_cantidad_tubos=0, **_):
     if cantidad <= 0:
         return CapacidadRepartidor.VACIO
-    if cantidad >= LIMITE_SOLICITUDES or tubos_comprometidos >= limite_tubos or solicitudes_sin_cantidad_tubos:
+    if cantidad >= limite_solicitudes or tubos_comprometidos >= limite_tubos or solicitudes_sin_cantidad_tubos:
         return CapacidadRepartidor.LLENO
     return CapacidadRepartidor.ESPACIO_DISPONIBLE
 
@@ -64,7 +64,7 @@ def anotar_carga_repartidores(consulta):
         repartidor_id=OuterRef("pk"),
         estado=EstadoMovimientoEnvioEspecial.ACTIVO,
     )
-    return anotar_rol_operativo(consulta).annotate(**{
+    return anotar_limites_repartidores(anotar_rol_operativo(consulta)).annotate(**{
         campo: Coalesce(Subquery(carga.annotate(valor=expresion).values("valor"), output_field=IntegerField()), 0)
         for campo, expresion in anotaciones.items()
     }).annotate(
@@ -84,9 +84,9 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=1):
         activo=True,
         usuario__estado=EstadoUsuario.ACTIVO,
         tiene_rol_operativo_vigente=True,
-        solicitudes_activas_calculadas__lt=LIMITE_SOLICITUDES,
+        solicitudes_activas_calculadas__lt=F("limite_solicitudes_efectivo"),
         solicitudes_sin_cantidad_tubos=0,
-        limite_tubos__gte=F("tubos_comprometidos") + cantidad_tubos,
+        limite_tubos_efectivo__gte=F("tubos_comprometidos") + cantidad_tubos,
         lleva_prioritario_exclusivo=False,
         tiene_especial_activo=False,
         vehiculo__estado=EstadoVehiculo.ACTIVO,
@@ -101,14 +101,15 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=1):
 
 
 def puede_recibir_solicitudes(repartidor, cantidad=None, *, carga=None):
+    limites = obtener_limites_repartidor(repartidor)
     if cantidad is None:
         cantidad = getattr(repartidor, "solicitudes_activas_calculadas", None)
     if cantidad is None:
         cantidad = contar_solicitudes_activas(repartidor)
-    if cantidad >= LIMITE_SOLICITUDES:
+    if cantidad >= limites["limite_solicitudes"]:
         return False
     carga = obtener_carga_tubos(repartidor) if carga is None else carga
-    if carga["solicitudes_sin_cantidad_tubos"] or carga["tubos_comprometidos"] >= repartidor.limite_tubos:
+    if carga["solicitudes_sin_cantidad_tubos"] or carga["tubos_comprometidos"] >= limites["limite_tubos"]:
         return False
     if not repartidor.activo or repartidor.usuario.estado != EstadoUsuario.ACTIVO:
         return False

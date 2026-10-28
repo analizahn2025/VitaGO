@@ -43,9 +43,9 @@ from apps.solicitudes.opciones import (
 from apps.ubicaciones.models import UbicacionEmpresa
 from apps.ubicaciones.opciones import EstadoUbicacion, EstadoUbicacionEmpresa
 from apps.repartidores.models import Repartidor
+from apps.repartidores.limites import obtener_limites_repartidor
 from apps.repartidores.operacion import registrar_operacion_repartidor
 from apps.repartidores.capacidad import (
-    LIMITE_SOLICITUDES,
     contar_solicitudes_activas,
     sincronizar_capacidad_repartidor,
     obtener_carga_tubos,
@@ -59,6 +59,7 @@ from apps.notificaciones.servicios import crear_notificaciones_asignacion
 
 
 registro = logging.getLogger("vitago.api")
+MAXIMO_ASIGNACIONES_POR_REINTENTO = 5
 
 
 def _obtener_empresa_y_sucursal(empresa_id, sucursal_id):
@@ -312,14 +313,16 @@ def _validar_repartidor_disponible(repartidor, solicitud):
     from apps.solicitudes.vigencia import exigir_vigencia_solicitud, limite_dia_operativo
 
     exigir_vigencia_solicitud(solicitud)
+    # Orden de bloqueo: solicitud -> motorista -> configuración compartida.
+    limites = obtener_limites_repartidor(repartidor, bloquear=True)
     cantidad = contar_solicitudes_activas(repartidor)
-    if cantidad >= LIMITE_SOLICITUDES:
-        raise LimiteSolicitudesRepartidor()
+    if cantidad >= limites["limite_solicitudes"]:
+        raise LimiteSolicitudesRepartidor(limites["limite_solicitudes"])
     validar_cantidad_tubos(solicitud.cantidad_tubos)
     carga = obtener_carga_tubos(repartidor)
     if carga["solicitudes_sin_cantidad_tubos"]:
         raise CupoTubosInsuficiente("Debe completar la cantidad de tubos de las solicitudes activas del motorista.")
-    disponibles = max(0, repartidor.limite_tubos - carga["tubos_comprometidos"])
+    disponibles = max(0, limites["limite_tubos"] - carga["tubos_comprometidos"])
     if solicitud.cantidad_tubos > disponibles:
         raise CupoTubosInsuficiente(f"El motorista dispone de {disponibles} tubos de cupo; la solicitud requiere {solicitud.cantidad_tubos}.")
     if not repartidor.activo or not Usuario.objetos.filter(pk=repartidor.usuario_id, estado=EstadoUsuario.ACTIVO).exists():
@@ -688,7 +691,7 @@ def reintentar_solicitudes_pendientes(empresa_id):
         examinadas.append(solicitud_id)
         if resultado is True:
             asignadas += 1
-            if asignadas == LIMITE_SOLICITUDES:
+            if asignadas == MAXIMO_ASIGNACIONES_POR_REINTENTO:
                 break
     return asignadas
 

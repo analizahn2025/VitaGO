@@ -5,6 +5,7 @@ from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
 
 @admin.register(Repartidor)
 class AdministracionRepartidor(admin.ModelAdmin):
+    exclude = ("limite_tubos",)
     list_display = (
         "usuario",
         "empresa",

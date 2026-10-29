@@ -13,6 +13,7 @@ def posiciones_vigentes(ahora=None):
     ahora = ahora or timezone.now()
     return RegistroUbicacion.objects.filter(
         jornada__estado=EstadoJornada.ACTIVA,
+        jornada__cierre_programado_en__gt=ahora,
         registrada_en__gte=ahora - timedelta(seconds=settings.ANTIGUEDAD_GPS_ASIGNACION_SEGUNDOS),
         registrada_en__lte=ahora,
         precision_metros__isnull=False,

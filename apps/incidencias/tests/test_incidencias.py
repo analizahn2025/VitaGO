@@ -253,15 +253,16 @@ class PruebasIncidencias(TestCase):
         self.assertIn("solicitud_id", error.exception.detail)
         self.assertFalse(Incidencia.objects.exists())
 
-    def test_corte_corporativo_se_valida_con_hora_servidor_sin_aplicarlo_a_network(self):
+    def test_corte_se_valida_con_hora_servidor_en_ambos_sistemas(self):
         self.jornada.iniciada_en = self.ahora - timedelta(days=2)
+        self.jornada.cierre_programado_en = self.ahora - timedelta(days=1)
         self.jornada.save()
         with self.assertRaises(ValidationError) as error:
             crear_incidencia(self.repartidor.usuario, self._datos(reportada_en=self.jornada.iniciada_en))
         self.assertIn("reportada_en", error.exception.detail)
         with override_settings(MODO_APLICACION="EXTERNO"):
-            incidencia = crear_incidencia(self.repartidor.usuario, {"descripcion": "Reporte Network"})
-        self.assertGreaterEqual(incidencia.reportada_en, self.ahora)
+            with self.assertRaises(ValidationError):
+                crear_incidencia(self.repartidor.usuario, {"descripcion": "Reporte Network"})
 
     def test_foto_incidencia_usa_hora_servidor_incluso_despues_de_cerrar_jornada(self):
         incidencia = crear_incidencia(self.repartidor.usuario, self._datos())

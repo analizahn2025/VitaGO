@@ -283,14 +283,11 @@ def detectar_llegada(usuario, repartidor_id, jornada_id):
             if jornada is None:
                 return None
             ahora = timezone.now()
-            from apps.solicitudes.vigencia import exigir_vigencia_solicitud, limite_dia_operativo
+            from apps.solicitudes.vigencia import exigir_vigencia_solicitud
 
             exigir_vigencia_solicitud(solicitud, ahora)
-            if (
-                settings.MODO_APLICACION == "CORPORATIVO"
-                and repartidor.empresa_id
-                and ahora >= limite_dia_operativo(jornada.iniciada_en, repartidor.empresa)
-            ):
+            from apps.jornadas.horario import jornada_vigente
+            if not jornada_vigente(jornada, ahora):
                 return None
             vigentes = obtener_paradas_operativas(repartidor)
             if not vigentes:

@@ -1,7 +1,6 @@
-"""Pérdida de habilitación y cierre corporativo, con trazabilidad e idempotencia."""
+"""Contingencias corporativas y cierre diario de ambos modos, con trazabilidad."""
 
 import logging
-from datetime import timedelta
 
 from django.conf import settings
 from django.db import transaction
@@ -9,6 +8,7 @@ from django.db.models import Q
 from django.utils import timezone
 
 from apps.jornadas.models import JornadaRepartidor
+from apps.jornadas.horario import corte_jornada, umbral_cierre
 from apps.notificaciones.models import NotificacionUsuario
 from apps.repartidores.models import Repartidor
 from apps.repartidores.habilitacion import anotar_rol_operativo, tiene_rol_operativo_repartidor
@@ -60,8 +60,6 @@ def cerrar_tramo_interrumpido(solicitud, repartidor, instante, motivo):
 
 @transaction.atomic
 def cerrar_solicitud_vencida(solicitud_id, ahora=None):
-    if settings.MODO_APLICACION != "CORPORATIVO":
-        return False
     ahora = ahora or timezone.now()
     solicitud = Solicitud.objects.select_for_update(of=("self",), no_key=True).select_related("empresa__pais").get(pk=solicitud_id)
     if solicitud.estado not in ESTADOS_ABIERTOS:
@@ -177,15 +175,13 @@ def programar_suspension(usuario_id, administrador):
 
 @transaction.atomic
 def cerrar_jornada_vencida(jornada_id, ahora=None):
-    if settings.MODO_APLICACION != "CORPORATIVO":
-        return False
     ahora = ahora or timezone.now()
     previa = JornadaRepartidor.objects.select_related("repartidor__empresa__pais").get(pk=jornada_id)
     repartidor = Repartidor.objects.select_for_update(of=("self",)).get(pk=previa.repartidor_id)
     jornada = JornadaRepartidor.objects.select_for_update(of=("self",)).get(pk=jornada_id)
-    if jornada.estado != "ACTIVA" or repartidor.empresa_id is None:
+    if jornada.estado != "ACTIVA":
         return False
-    corte = limite_dia_operativo(jornada.iniciada_en, previa.repartidor.empresa)
+    corte = corte_jornada(previa)
     if ahora < corte or AsignacionSolicitud.objects.filter(repartidor=repartidor, estado=EstadoAsignacionSolicitud.ACTIVA).exists():
         return False
     from apps.jornadas.servicios import registrar_cierre_jornada
@@ -203,10 +199,8 @@ def cerrar_jornada_vencida(jornada_id, ahora=None):
 
 
 def procesar_cierre_diario(ahora=None):
-    """Recupera también días anteriores; no toca Network ni terminales históricos."""
+    """Cierre a las 22:00 y recuperación atrasada; conserva terminales históricos."""
     resultado = {"solicitudes_cerradas": 0, "servicios_retirados": 0, "jornadas_cerradas": 0}
-    if settings.MODO_APLICACION != "CORPORATIVO":
-        return resultado
     ahora = ahora or timezone.now()
     def procesar_unidad(campo, funcion, *argumentos):
         try:
@@ -216,27 +210,36 @@ def procesar_cierre_diario(ahora=None):
             registro.exception("No se pudo completar %s para %s", campo, argumentos[0])
 
     from apps.organizaciones.models import Empresa
-    empresas_con_servicios = Solicitud.objects.filter(estado__in=ESTADOS_ABIERTOS).values("empresa_id")
-    empresas_con_jornadas = JornadaRepartidor.objects.filter(estado="ACTIVA").values("repartidor__empresa_id")
-    empresas = Empresa.objects.filter(
-        Q(pk__in=empresas_con_servicios) | Q(pk__in=empresas_con_jornadas),
-    ).select_related("pais")
-    for empresa in empresas.iterator(chunk_size=100):
+    if settings.MODO_APLICACION == "CORPORATIVO":
+        empresas_con_servicios = Solicitud.objects.filter(estado__in=ESTADOS_ABIERTOS).values("empresa_id")
+        empresas_con_jornadas = JornadaRepartidor.objects.filter(estado="ACTIVA").values("repartidor__empresa_id")
+        empresas = Empresa.objects.filter(
+            Q(pk__in=empresas_con_servicios) | Q(pk__in=empresas_con_jornadas),
+        ).select_related("pais").iterator(chunk_size=100)
+    else:
+        empresas = [None]  # Flota global de Network: zona operativa del servidor.
+    for empresa in empresas:
         try:
-            inicio_hoy = limite_dia_operativo(ahora, empresa) - timedelta(days=1)
+            umbral = umbral_cierre(ahora, empresa)
         except Exception:
             resultado["errores"] = resultado.get("errores", 0) + 1
-            registro.exception("No se pudo resolver el día de la empresa %s", empresa.pk)
+            registro.exception("No se pudo resolver el día de la empresa %s", getattr(empresa, "pk", "RED"))
             continue
         # No bloquear ni recorrer los servicios vigentes de hoy cada minuto.
-        consulta = Solicitud.objects.filter(empresa=empresa, estado__in=ESTADOS_ABIERTOS,
-            creado_en__lt=inicio_hoy).values_list("pk", flat=True)
+        consulta = Solicitud.objects.filter(estado__in=ESTADOS_ABIERTOS, creado_en__lt=umbral)
+        if empresa is not None:
+            consulta = consulta.filter(empresa=empresa)
+        consulta = consulta.values_list("pk", flat=True)
         for pk in consulta.iterator(chunk_size=200):
             procesar_unidad("solicitudes_cerradas", cerrar_solicitud_vencida, pk, ahora)
-        jornadas = JornadaRepartidor.objects.filter(repartidor__empresa=empresa, estado="ACTIVA",
-            iniciada_en__lt=inicio_hoy).values_list("pk", flat=True)
+        jornadas = JornadaRepartidor.objects.filter(estado="ACTIVA", iniciada_en__lt=umbral)
+        if empresa is not None:
+            jornadas = jornadas.filter(repartidor__empresa=empresa)
+        jornadas = jornadas.values_list("pk", flat=True)
         for pk in jornadas.iterator(chunk_size=200):
             procesar_unidad("jornadas_cerradas", cerrar_jornada_vencida, pk, ahora)
+    if settings.MODO_APLICACION != "CORPORATIVO":
+        return resultado
     sin_habilitacion = anotar_rol_operativo(Repartidor.objects.all()).exclude(
         usuario__estado=EstadoUsuario.ACTIVO, tiene_rol_operativo_vigente=True,
     )

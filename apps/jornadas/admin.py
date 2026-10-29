@@ -1,6 +1,6 @@
 from django.contrib import admin
 
-from apps.jornadas.models import JornadaRepartidor
+from apps.jornadas.models import AlmuerzoJornada, JornadaRepartidor
 
 
 @admin.register(JornadaRepartidor)
@@ -9,6 +9,7 @@ class AdministracionJornadaRepartidor(admin.ModelAdmin):
         "repartidor",
         "estado",
         "iniciada_en",
+        "fecha_operativa", "cierre_programado_en",
         "finalizada_en",
         "servicios_completados",
         "kilometros_operativos",
@@ -16,6 +17,7 @@ class AdministracionJornadaRepartidor(admin.ModelAdmin):
     list_filter = ("estado",)
     search_fields = ("repartidor__usuario__correo",)
     readonly_fields = (
+        "fecha_operativa", "cierre_programado_en",
         "repartidor",
         "estado",
         "iniciada_en",
@@ -35,4 +37,23 @@ class AdministracionJornadaRepartidor(admin.ModelAdmin):
         "creado_en",
         "actualizado_en",
     )
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
+
+
+@admin.register(AlmuerzoJornada)
+class AdministracionAlmuerzoJornada(admin.ModelAdmin):
+    list_display = ("jornada", "iniciada_en", "finalizada_en", "motivo_cierre")
+    readonly_fields = ("jornada", "iniciada_en", "finalizada_en", "finalizada_por", "motivo_cierre", "creado_en", "actualizado_en")
+    list_filter = ("finalizada_en",)
+
+    def has_add_permission(self, request):
+        return False
+
+    def has_delete_permission(self, request, obj=None):
+        return False
 

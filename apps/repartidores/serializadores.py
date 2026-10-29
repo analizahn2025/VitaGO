@@ -60,6 +60,8 @@ class SerializadorLecturaTemperaturaResumen(serializers.ModelSerializer):
 
 
 class SerializadorRepartidor(serializers.ModelSerializer):
+    en_almuerzo = serializers.SerializerMethodField()
+    almuerzo_iniciado_en = serializers.SerializerMethodField()
     usuario = SerializadorUsuarioPerfil(read_only=True)
     vehiculo = SerializadorVehiculo(read_only=True)
     capacidad = serializers.SerializerMethodField()
@@ -72,6 +74,22 @@ class SerializadorRepartidor(serializers.ModelSerializer):
     tubos_reservados = serializers.SerializerMethodField()
     tubos_disponibles = serializers.SerializerMethodField()
     solicitudes_sin_cantidad_tubos = serializers.SerializerMethodField()
+
+    def _almuerzo(self, repartidor):
+        if not hasattr(repartidor, "en_almuerzo"):
+            from apps.jornadas.horario import anotar_jornada_y_almuerzo
+            datos = anotar_jornada_y_almuerzo(Repartidor.objects.filter(pk=repartidor.pk)).values("en_almuerzo", "almuerzo_iniciado_en").get()
+            repartidor.en_almuerzo = datos["en_almuerzo"]
+            repartidor.almuerzo_iniciado_en = datos["almuerzo_iniciado_en"]
+        return repartidor.almuerzo_iniciado_en
+
+    def get_en_almuerzo(self, repartidor):
+        self._almuerzo(repartidor)
+        return repartidor.en_almuerzo
+
+    def get_almuerzo_iniciado_en(self, repartidor):
+        instante = self._almuerzo(repartidor)
+        return serializers.DateTimeField().to_representation(instante) if instante else None
 
     def _carga(self, repartidor):
         if not hasattr(self, "_cargas_tubos"):
@@ -130,6 +148,7 @@ class SerializadorRepartidor(serializers.ModelSerializer):
             "empresa_id",
             "vehiculo",
             "estado_operativo",
+            "en_almuerzo", "almuerzo_iniciado_en",
             "capacidad",
             "solicitudes_activas",
             "limite_solicitudes",
@@ -149,6 +168,7 @@ class SerializadorCreacionRepartidor(serializers.Serializer):
 
 
 class SerializadorConsultaRepartidores(serializers.Serializer):
+    en_almuerzo = serializers.BooleanField(required=False)
     cantidad_tubos = serializers.IntegerField(min_value=1, max_value=2147483647, required=False)
     empresa_id = serializers.UUIDField(required=False)
     estado_operativo = serializers.ChoiceField(

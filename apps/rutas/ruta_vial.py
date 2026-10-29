@@ -137,19 +137,15 @@ def _reservar_consumo(ahora):
 
 def _exigir_dia_operativo_vigente(repartidor, paradas, ahora):
     """No depende de que la tarea local ya haya cerrado el día anterior."""
-    if settings.MODO_APLICACION != "CORPORATIVO":
-        return
     from apps.jornadas.models import JornadaRepartidor
     from apps.solicitudes.models import Solicitud
     from apps.solicitudes.vigencia import limite_dia_operativo
 
-    inicio_jornada = JornadaRepartidor.objects.filter(
+    from apps.jornadas.horario import jornada_vigente
+    jornada = JornadaRepartidor.objects.filter(
         repartidor=repartidor, estado="ACTIVA",
-    ).values_list("iniciada_en", flat=True).first()
-    jornadas_vencidas = (
-        inicio_jornada is not None and repartidor.empresa_id is not None
-        and ahora >= limite_dia_operativo(inicio_jornada, repartidor.empresa)
-    )
+    ).first()
+    jornadas_vencidas = not jornada_vigente(jornada, ahora)
     solicitudes = Solicitud.objects.filter(
         pk__in={p["solicitud_id"] for p in paradas},
     ).select_related("empresa__pais")

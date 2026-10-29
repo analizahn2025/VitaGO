@@ -1,4 +1,4 @@
-"""Traspasos corporativos y corte a medianoche, sin escribir en bases reales."""
+"""Traspasos corporativos y corte a las22:00, sin escribir en bases reales."""
 
 from datetime import timedelta
 from uuid import uuid4
@@ -184,7 +184,7 @@ class PruebasContingenciasCorporativas(TestCase):
     def test_cierre_diario_con_paquete_no_entregado_cierra_asignacion_y_ruta(self):
         self._asignar(EstadoSolicitud.EN_TRANSITO)
         corte = self._vencer()
-        JornadaRepartidor.objects.filter(repartidor=self.anterior).update(iniciada_en=corte - timedelta(hours=6))
+        JornadaRepartidor.objects.filter(repartidor=self.anterior).update(iniciada_en=corte - timedelta(hours=6), fecha_operativa=corte.date(), cierre_programado_en=corte)
         resultado = procesar_cierre_diario(corte + timedelta(hours=3))
         self.assertEqual(resultado["solicitudes_cerradas"], 1)
         self.solicitud.refresh_from_db()
@@ -199,7 +199,7 @@ class PruebasContingenciasCorporativas(TestCase):
 
     def test_cierre_diario_respeta_zona_horaria_y_limite_exacto(self):
         corte = self._vencer()
-        self.assertEqual(corte.hour, 0)
+        self.assertEqual(corte.hour, 22)
         self.assertEqual(corte.utcoffset(), timedelta(hours=-6))
         self.assertFalse(cerrar_solicitud_vencida(self.solicitud.pk, corte - timedelta(microseconds=1)))
         self.assertTrue(cerrar_solicitud_vencida(self.solicitud.pk, corte))
@@ -232,9 +232,9 @@ class PruebasContingenciasCorporativas(TestCase):
         self.assertFalse(movimiento.calidad_kilometraje["sincronizacion_verificada"])
 
     @override_settings(MODO_APLICACION="EXTERNO")
-    def test_network_no_ejecuta_esta_politica(self):
+    def test_network_cierra_vencidas_sin_retirar_por_suspension_corporativa(self):
         self._vencer()
-        self.assertFalse(cerrar_solicitud_vencida(self.solicitud.pk, self.ahora))
+        self.assertTrue(cerrar_solicitud_vencida(self.solicitud.pk, self.ahora))
         self.assertEqual(procesar_cierre_diario(self.ahora), {"solicitudes_cerradas": 0, "servicios_retirados": 0, "jornadas_cerradas": 0})
         self.assertEqual(procesar_suspension(self.anterior.usuario_id), 0)
         with self.assertRaises(CommandError):
@@ -365,6 +365,8 @@ class PruebasContingenciasCorporativas(TestCase):
         corte = limite_dia_operativo(self.ahora - timedelta(days=1), self.empresa)
         jornada = JornadaRepartidor.objects.get(repartidor=self.anterior)
         jornada.iniciada_en = corte - timedelta(hours=6)
+        jornada.fecha_operativa = corte.date()
+        jornada.cierre_programado_en = corte
         jornada.save()
         punto = {"id_cliente": uuid4(), "latitud": self.origen.latitud, "longitud": self.origen.longitud,
                  "precision_metros": Decimal("8"), "registrada_en": corte + timedelta(seconds=1)}

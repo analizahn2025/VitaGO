@@ -213,7 +213,6 @@ class PruebasAsignacionesSolicitud(TestCase):
 
     def test_reasignacion_cierra_anterior_y_crea_otra(self):
         RegistroUbicacion.objects.all().delete()
-        JornadaRepartidor.objects.all().delete()
         asignar_solicitud_manualmente(
             self.administrador,
             self.solicitud.id,
@@ -249,7 +248,8 @@ class PruebasAsignacionesSolicitud(TestCase):
         )
         anterior = RutaRepartidor.objects.get(repartidor=self.repartidores[0])
         actual = RutaRepartidor.objects.get(repartidor=self.repartidores[1])
-        self.assertEqual(anterior.estado, RutaRepartidor.Estado.FINALIZADA)
+        # La jornada sigue abierta aunque la reasignación deje la ruta sin servicios.
+        self.assertEqual(anterior.estado, RutaRepartidor.Estado.ACTIVA)
         self.assertEqual(anterior.versiones.count(), 2)
         self.assertEqual(anterior.versiones.get(numero=2).paradas.count(), 0)
         self.assertEqual(actual.versiones.get().paradas.count(), 2)
@@ -393,7 +393,6 @@ class PruebasAsignacionesSolicitud(TestCase):
 
     def test_cancelar_libera_capacidad_automaticamente(self):
         RegistroUbicacion.objects.all().delete()
-        JornadaRepartidor.objects.all().delete()
         repartidor = self.repartidores[0]
         asignar_solicitud_manualmente(
             self.administrador,
@@ -413,7 +412,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             ).exists()
         )
         ruta = RutaRepartidor.objects.get(repartidor=repartidor)
-        self.assertEqual(ruta.estado, RutaRepartidor.Estado.FINALIZADA)
+        self.assertEqual(ruta.estado, RutaRepartidor.Estado.ACTIVA)
         self.assertEqual(
             ruta.versiones.get(numero=2).motivo, VersionRuta.Motivo.CANCELACION
         )

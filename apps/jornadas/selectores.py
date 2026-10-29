@@ -10,13 +10,49 @@ from apps.repartidores.models import Repartidor
 from apps.usuarios.servicios import obtener_alcances_permiso
 
 
+def estado_jornada_propia(usuario):
+    """Solo consulta; recuperar cierres corresponde al mantenimiento o al inicio."""
+    from datetime import timedelta
+    from django.utils import timezone
+    from apps.jornadas.horario import periodo_operativo, jornada_vigente, zona_operativa
+    from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
+    from apps.usuarios.servicios import usuario_tiene_permiso
+
+    jornada = obtener_jornada_activa_propia(usuario)
+    repartidor = _obtener_repartidor_propio(usuario)
+    ahora = timezone.now()
+    fecha, inicio, corte = periodo_operativo(ahora, repartidor.empresa)
+    inicio_hoy = JornadaRepartidor.objects.filter(repartidor=repartidor).filter(
+        Q(fecha_operativa=fecha) | Q(fecha_operativa__isnull=True, iniciada_en__gte=inicio, iniciada_en__lt=inicio + timedelta(days=1)),
+    ).exists()
+    cierre_pendiente = jornada is not None and not jornada_vigente(jornada, ahora)
+    puede_iniciar = (
+        ahora < corte and not inicio_hoy and (jornada is None or cierre_pendiente)
+        and (repartidor.estado_operativo in ("OFFLINE", "AVAILABLE") or cierre_pendiente)
+        and repartidor.vehiculo_id is not None
+        and repartidor.vehiculo.estado == EstadoVehiculo.ACTIVO
+        and repartidor.vehiculo.tipo == TipoVehiculo.MOTOCICLETA
+        and usuario_tiene_permiso(usuario, "jornada.iniciar", empresa=repartidor.empresa)
+    )
+    return jornada, {
+        "hora_servidor": ahora,
+        "fecha_operativa": fecha,
+        "zona_horaria_operativa": str(zona_operativa(repartidor.empresa)),
+        "cierre_programado_en": corte,
+        "jornada_iniciada_hoy": inicio_hoy,
+        "puede_iniciar_jornada": puede_iniciar,
+        "cierre_pendiente": cierre_pendiente,
+    }
+
+
 def _consulta_base():
     return JornadaRepartidor.objects.select_related(
         "repartidor",
         "repartidor__usuario",
         "repartidor__empresa",
+        "repartidor__empresa__pais",
         "repartidor__vehiculo",
-    )
+    ).prefetch_related("almuerzos")
 
 
 def _obtener_repartidor_propio(usuario):

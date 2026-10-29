@@ -171,9 +171,22 @@ def actualizar_operacion_repartidor(usuario, identificador_repartidor, cambios):
     capacidad_anterior = repartidor.capacidad
     estado_nuevo = cambios.get("estado_operativo", estado_anterior)
     capacidad_nueva = calcular_capacidad(contar_solicitudes_activas(repartidor), **obtener_limites_repartidor(repartidor), **obtener_carga_tubos(repartidor))
-
     if estado_nuevo == estado_anterior and capacidad_nueva == capacidad_anterior:
         raise ValidationError("La operación no contiene cambios efectivos.")
+    from apps.jornadas.models import JornadaRepartidor
+    from apps.jornadas.horario import exigir_jornada_vigente
+    from apps.jornadas.servicios import cerrar_almuerzos
+
+    jornada = JornadaRepartidor.objects.select_for_update(of=("self",)).filter(repartidor=repartidor, estado="ACTIVA").first()
+    en_almuerzo = jornada is not None and jornada.almuerzos.filter(finalizada_en__isnull=True).exists()
+    if estado_nuevo in (EstadoOperativoRepartidor.DISPONIBLE, EstadoOperativoRepartidor.EN_RUTA):
+        exigir_jornada_vigente(jornada)
+        if en_almuerzo:
+            raise ValidationError({"estado_operativo": "Debe finalizar el almuerzo desde su jornada para volver a estar disponible."})
+    elif en_almuerzo and estado_nuevo in (EstadoOperativoRepartidor.DESCONECTADO, EstadoOperativoRepartidor.FUERA_SERVICIO):
+        from django.utils import timezone
+        from apps.jornadas.horario import corte_jornada
+        cerrar_almuerzos(jornada, min(timezone.now(), corte_jornada(jornada)), usuario, "CAMBIO_ESTADO")
     if estado_nuevo == "AVAILABLE" and (
         not repartidor.vehiculo_id
         or repartidor.vehiculo.estado != EstadoVehiculo.ACTIVO

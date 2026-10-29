@@ -4,6 +4,7 @@ from django.db.models import Count, Exists, F, IntegerField, OuterRef, Q, Subque
 from django.db.models.functions import Coalesce
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
+from apps.jornadas.horario import anotar_jornada_y_almuerzo
 from apps.repartidores.habilitacion import anotar_rol_operativo, tiene_rol_operativo_repartidor
 from apps.repartidores.limites import anotar_limites_repartidores, obtener_limites_repartidor
 from apps.repartidores.opciones import CapacidadRepartidor, EstadoOperativoRepartidor
@@ -64,7 +65,7 @@ def anotar_carga_repartidores(consulta):
         repartidor_id=OuterRef("pk"),
         estado=EstadoMovimientoEnvioEspecial.ACTIVO,
     )
-    return anotar_limites_repartidores(anotar_rol_operativo(consulta)).annotate(**{
+    return anotar_jornada_y_almuerzo(anotar_limites_repartidores(anotar_rol_operativo(consulta))).annotate(**{
         campo: Coalesce(Subquery(carga.annotate(valor=expresion).values("valor"), output_field=IntegerField()), 0)
         for campo, expresion in anotaciones.items()
     }).annotate(
@@ -84,6 +85,8 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=1):
         activo=True,
         usuario__estado=EstadoUsuario.ACTIVO,
         tiene_rol_operativo_vigente=True,
+        tiene_jornada_vigente=True,
+        en_almuerzo=False,
         solicitudes_activas_calculadas__lt=F("limite_solicitudes_efectivo"),
         solicitudes_sin_cantidad_tubos=0,
         limite_tubos_efectivo__gte=F("tubos_comprometidos") + cantidad_tubos,
@@ -101,6 +104,19 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=1):
 
 
 def puede_recibir_solicitudes(repartidor, cantidad=None, *, carga=None):
+    vigente = getattr(repartidor, "tiene_jornada_vigente", None)
+    if vigente is None:
+        from apps.jornadas.models import JornadaRepartidor
+        from apps.jornadas.horario import jornada_vigente
+        vigente = jornada_vigente(JornadaRepartidor.objects.filter(repartidor=repartidor, estado="ACTIVA").first())
+    if not vigente:
+        return False
+    en_almuerzo = getattr(repartidor, "en_almuerzo", None)
+    if en_almuerzo is None:
+        from apps.jornadas.models import AlmuerzoJornada
+        en_almuerzo = AlmuerzoJornada.objects.filter(jornada__repartidor=repartidor, jornada__estado="ACTIVA", finalizada_en__isnull=True).exists()
+    if en_almuerzo:
+        return False
     limites = obtener_limites_repartidor(repartidor)
     if cantidad is None:
         cantidad = getattr(repartidor, "solicitudes_activas_calculadas", None)

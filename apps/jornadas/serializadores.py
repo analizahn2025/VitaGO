@@ -1,12 +1,22 @@
 from rest_framework import serializers
 
-from apps.jornadas.models import JornadaRepartidor
+from apps.jornadas.models import AlmuerzoJornada, JornadaRepartidor
+from apps.jornadas.horario import jornada_vigente
 from apps.jornadas.opciones import EstadoJornada
 from apps.seguimiento.serializadores import SerializadorConfirmacionGPS, SerializadorSesionCierreGPS
 
 
+class SerializadorAlmuerzo(serializers.ModelSerializer):
+    class Meta:
+        model = AlmuerzoJornada
+        fields = ("id", "iniciada_en", "finalizada_en", "finalizada_por_id", "motivo_cierre")
+
+
 class SerializadorJornada(serializers.ModelSerializer):
     incidencias_disponibles = serializers.SerializerMethodField()
+    puede_operar = serializers.SerializerMethodField()
+    en_almuerzo = serializers.SerializerMethodField()
+    almuerzos = SerializadorAlmuerzo(many=True, read_only=True)
 
     class Meta:
         model = JornadaRepartidor
@@ -16,6 +26,7 @@ class SerializadorJornada(serializers.ModelSerializer):
             "estado",
             "iniciada_en",
             "finalizada_en",
+            "fecha_operativa", "cierre_programado_en", "puede_operar", "en_almuerzo", "almuerzos",
             "latitud_inicio",
             "longitud_inicio",
             "latitud_fin",
@@ -37,6 +48,19 @@ class SerializadorJornada(serializers.ModelSerializer):
 
     def get_incidencias_disponibles(self, objeto):
         return True
+
+    def get_puede_operar(self, objeto):
+        return jornada_vigente(objeto) and not self.get_en_almuerzo(objeto)
+
+    def get_en_almuerzo(self, objeto):
+        return jornada_vigente(objeto) and any(almuerzo.finalizada_en is None for almuerzo in objeto.almuerzos.all())
+
+
+class SerializadorAccionAlmuerzo(serializers.Serializer):
+    def validate(self, atributos):
+        if self.initial_data:
+            raise serializers.ValidationError({campo: "No se admiten parámetros; la hora la establece el servidor." for campo in self.initial_data})
+        return atributos
 
 
 class SerializadorCoordenadasJornada(serializers.Serializer):

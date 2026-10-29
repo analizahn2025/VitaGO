@@ -49,6 +49,8 @@ def listar_repartidores_autorizados(usuario, filtros=None):
             consulta = consulta.filter(solicitudes_activas_calculadas__gt=0).exclude(lleno)
     if "activo" in filtros:
         consulta = consulta.filter(activo=filtros["activo"])
+    if "en_almuerzo" in filtros:
+        consulta = consulta.filter(en_almuerzo=filtros["en_almuerzo"])
     return consulta.order_by("usuario__nombres", "usuario__apellidos", "id")
 
 

@@ -27,7 +27,7 @@ class PruebasCorteCalculo(TestCase):
     def _preparar_corte(self):
         inicio = timezone.now() - timedelta(days=1)
         self.corte = limite_dia_operativo(inicio, self.motorista.empresa)
-        JornadaRepartidor.objects.filter(pk=self.jornada.pk).update(iniciada_en=inicio)
+        JornadaRepartidor.objects.filter(pk=self.jornada.pk).update(iniciada_en=inicio, fecha_operativa=self.corte.date(), cierre_programado_en=self.corte)
         Solicitud.objects.filter(pk=self.solicitud.pk).update(creado_en=inicio)
         RegistroUbicacion.objects.filter(pk=self.punto.pk).update(registrada_en=self.corte - timedelta(seconds=5))
 
@@ -92,10 +92,10 @@ class PruebasCorteCalculo(TestCase):
         proveedor.assert_not_called()
 
     @override_settings(MODO_APLICACION="EXTERNO")
-    def test_network_conserva_calculo_fuera_del_corte_corporativo(self):
+    def test_network_rechaza_calculo_fuera_del_corte(self):
         self._preparar_corte()
         with patch("django.utils.timezone.now", return_value=self.corte + timedelta(seconds=10)), \
                 patch("apps.rutas.ruta_vial.calcular_ruta_google", return_value=datos.RESULTADO) as proveedor:
             respuesta = self.calcular()
-        self.assertEqual(respuesta.status_code, 200)
-        proveedor.assert_called_once()
+        self.assertEqual(respuesta.status_code, 409)
+        proveedor.assert_not_called()

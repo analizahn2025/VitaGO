@@ -86,7 +86,7 @@ def _actividad_por_fecha(identificadores, campo, inicio, fin, *, estados=None):
     responsable = historial.filter(asignada_en__lte=OuterRef(campo)).filter(vigente).order_by("-asignada_en", "-id")
     periodo = Q(**{f"{campo}__gte": inicio, f"{campo}__lt": fin})
     if campo == "cerrada_en":
-        # El corte efectivo FIN_DIA es la medianoche que termina esa operación,
+        # Incluye el corte actual de las 22:00 y los cierres históricos a medianoche,
         # aunque la tarea de recuperación se ejecute durante el día siguiente.
         periodo = (periodo & ~Q(motivo_cierre="FIN_DIA")) | Q(
             motivo_cierre="FIN_DIA", cerrada_en__gt=inicio, cerrada_en__lte=fin,

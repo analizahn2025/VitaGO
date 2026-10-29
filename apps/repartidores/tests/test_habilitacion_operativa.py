@@ -221,6 +221,8 @@ class PruebasHabilitacionOperativa(TestCase):
         self.assertIsNone(perfil.empresa_id)
         perfil.estado_operativo = "AVAILABLE"
         perfil.save()
+        from apps.jornadas.models import JornadaRepartidor
+        JornadaRepartidor.objects.create(repartidor=perfil)
         self.assertTrue(puede_recibir_solicitudes(perfil))
 
     @override_settings(MODO_APLICACION="EXTERNO")

@@ -41,6 +41,8 @@ def iniciar_movimiento_especial(
         raise ValidationError(
             {"jornada": "El motorista debe tener una jornada activa."}
         ) from error
+    from apps.jornadas.horario import exigir_jornada_vigente
+    exigir_jornada_vigente(jornada, ahora)
     if ahora < jornada.iniciada_en:
         raise ValidationError(
             {"jornada": "El movimiento no puede iniciar antes de la jornada."}

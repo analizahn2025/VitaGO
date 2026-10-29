@@ -3,7 +3,6 @@
 import uuid
 
 from django.core.files.storage import default_storage
-from django.conf import settings
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
@@ -109,11 +108,8 @@ def crear_incidencia(usuario, datos_validados):
         )
     jornada = _obtener_jornada_activa_bloqueada(repartidor)
     reportada_en = timezone.now()
-    vencida = False
-    if settings.MODO_APLICACION == "CORPORATIVO" and repartidor.empresa_id:
-        from apps.solicitudes.vigencia import limite_dia_operativo
-
-        vencida = reportada_en >= limite_dia_operativo(jornada.iniciada_en, repartidor.empresa)
+    from apps.jornadas.horario import corte_jornada
+    vencida = reportada_en >= corte_jornada(jornada)
     if reportada_en < jornada.iniciada_en or vencida:
         raise ValidationError(
             {

@@ -328,6 +328,7 @@ class PruebasLlegadasAutomaticas(TestCase):
     def test_jornada_de_dia_anterior_no_produce_llegada(self):
         self._permanencia()
         self.jornada.iniciada_en = self.ahora - timedelta(days=1)
+        self.jornada.cierre_programado_en = self.ahora - timedelta(hours=1)
         self.jornada.save()
         self._assert_sin_llegada()
 

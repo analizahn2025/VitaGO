@@ -1,6 +1,5 @@
 """Casos de uso transaccionales para jornadas de motoristas."""
 
-from django.conf import settings
 from django.db import transaction
 from django.db.models import Exists, OuterRef, Q
 from django.http import Http404
@@ -8,7 +7,8 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
-from apps.jornadas.models import JornadaRepartidor
+from apps.jornadas.models import AlmuerzoJornada, JornadaRepartidor
+from apps.jornadas.horario import corte_jornada, exigir_jornada_vigente, periodo_operativo
 from apps.jornadas.kilometraje import calcular_kilometraje_operativo
 from apps.jornadas.opciones import EstadoJornada
 from apps.repartidores.models import Repartidor
@@ -17,6 +17,9 @@ from apps.repartidores.opciones import EstadoOperativoRepartidor
 from apps.solicitudes.models import AsignacionSolicitud, Solicitud
 from apps.solicitudes.opciones import (
     EstadoAsignacionSolicitud,
+    ESTADOS_SOLICITUD_ACTIVOS,
+    EstadoSolicitud,
+    EstadoMovimientoEnvioEspecial,
     PrioridadSolicitud,
 )
 from apps.usuarios.opciones import EstadoUsuario
@@ -27,7 +30,7 @@ def _obtener_repartidor_propio_bloqueado(usuario):
     try:
         return (
             Repartidor.objects.select_for_update(of=("self",))
-            .select_related("usuario", "empresa", "vehiculo")
+            .select_related("usuario", "empresa__pais", "vehiculo")
             .get(
                 usuario=usuario,
                 activo=True,
@@ -60,11 +63,39 @@ def _validar_coordenadas(datos):
         raise ValidationError({"longitud": "La longitud no es válida."})
 
 
-@transaction.atomic
 def iniciar_jornada(usuario, datos_validados):
+    """Recuperar el día anterior antes de tomar el bloqueo operativo del inicio."""
+    _validar_coordenadas(datos_validados)
+    try:
+        repartidor = Repartidor.objects.select_related("empresa__pais").get(usuario=usuario, activo=True, usuario__estado=EstadoUsuario.ACTIVO)
+    except Repartidor.DoesNotExist as error:
+        raise Http404("El usuario no posee un perfil activo de motorista.") from error
+    _exigir_permiso(usuario, "jornada.iniciar", repartidor)
+    from apps.solicitudes.contingencias import cerrar_jornada_vencida, cerrar_solicitud_vencida, ESTADOS_ABIERTOS
+
+    ahora = timezone.now()
+    for pk in Solicitud.objects.filter(repartidor_asignado=repartidor, estado__in=ESTADOS_ABIERTOS).values_list("pk", flat=True):
+        cerrar_solicitud_vencida(pk, ahora)
+    for pk in JornadaRepartidor.objects.filter(repartidor=repartidor, estado=EstadoJornada.ACTIVA).values_list("pk", flat=True):
+        cerrar_jornada_vencida(pk, ahora)
+    return _iniciar_jornada(usuario, datos_validados)
+
+
+@transaction.atomic
+def _iniciar_jornada(usuario, datos_validados):
     _validar_coordenadas(datos_validados)
     repartidor = _obtener_repartidor_propio_bloqueado(usuario)
     _exigir_permiso(usuario, "jornada.iniciar", repartidor)
+    ahora = timezone.now()
+    fecha, inicio, corte = periodo_operativo(ahora, repartidor.empresa)
+    if ahora >= corte:
+        raise ValidationError({"jornada": "El día operativo terminó a las 22:00. Podrá iniciar mañana."})
+    from datetime import timedelta
+
+    if JornadaRepartidor.objects.filter(repartidor=repartidor).filter(
+        Q(fecha_operativa=fecha) | Q(fecha_operativa__isnull=True, iniciada_en__gte=inicio, iniciada_en__lt=inicio + timedelta(days=1))
+    ).exists():
+        raise ValidationError({"jornada": "Solo puede iniciar una jornada por día, aunque ya la haya finalizado."})
 
     if (
         not repartidor.vehiculo_id
@@ -94,6 +125,7 @@ def iniciar_jornada(usuario, datos_validados):
 
     jornada = JornadaRepartidor.objects.create(
         repartidor=repartidor,
+        iniciada_en=ahora, fecha_operativa=fecha, cierre_programado_en=corte,
         latitud_inicio=datos_validados.get("latitud"),
         longitud_inicio=datos_validados.get("longitud"),
     )
@@ -113,6 +145,61 @@ def iniciar_jornada(usuario, datos_validados):
     programar_reintento_pendientes(repartidor.empresa_id)
     from apps.solicitudes.flujo_automatico import programar_avance_automatico
     programar_avance_automatico(repartidor.pk)
+    return jornada
+
+
+def cerrar_almuerzos(jornada, instante, usuario=None, motivo="CIERRE_JORNADA"):
+    """El motorista y su jornada deben estar bloqueados por el llamador."""
+    for almuerzo in AlmuerzoJornada.objects.select_for_update().filter(jornada=jornada, finalizada_en__isnull=True):
+        almuerzo.finalizada_en = max(instante, almuerzo.iniciada_en)
+        almuerzo.finalizada_por = usuario
+        almuerzo.motivo_cierre = motivo
+        almuerzo.save(update_fields=("finalizada_en", "finalizada_por", "motivo_cierre", "actualizado_en"))
+
+
+@transaction.atomic
+def cambiar_almuerzo(usuario, jornada_id, *, iniciar):
+    repartidor = _obtener_repartidor_propio_bloqueado(usuario)
+    _exigir_permiso(usuario, "repartidor.actualizar_estado", repartidor)
+    try:
+        jornada = JornadaRepartidor.objects.select_for_update(of=("self",)).get(pk=jornada_id, repartidor=repartidor)
+    except JornadaRepartidor.DoesNotExist as error:
+        raise Http404("La jornada no existe o no pertenece al motorista.") from error
+    ahora = timezone.now()
+    exigir_jornada_vigente(jornada, ahora)
+    from apps.repartidores.habilitacion import tiene_rol_operativo_repartidor
+    if not tiene_rol_operativo_repartidor(repartidor):
+        raise PermissionDenied("El motorista no tiene un rol operativo vigente.")
+    abierto = AlmuerzoJornada.objects.filter(jornada=jornada, finalizada_en__isnull=True).exists()
+    if iniciar:
+        if abierto:
+            raise ValidationError({"almuerzo": "El almuerzo ya está iniciado."})
+        from apps.solicitudes.models import MovimientoEnvioEspecial
+
+        if (
+            Solicitud.objects.filter(repartidor_asignado=repartidor, estado__in=(EstadoSolicitud.PENDIENTE, *ESTADOS_SOLICITUD_ACTIVOS)).exists()
+            or AsignacionSolicitud.objects.filter(repartidor=repartidor, estado=EstadoAsignacionSolicitud.ACTIVA).exists()
+            or MovimientoEnvioEspecial.objects.filter(repartidor=repartidor, estado=EstadoMovimientoEnvioEspecial.ACTIVO).exists()
+        ):
+            raise ValidationError({"almuerzo": "No puede iniciar almuerzo mientras tenga trabajos pendientes."})
+        if repartidor.estado_operativo != EstadoOperativoRepartidor.DISPONIBLE:
+            raise ValidationError({"almuerzo": "Debe estar disponible para iniciar almuerzo."})
+        AlmuerzoJornada.objects.create(jornada=jornada, iniciada_en=ahora)
+        registrar_operacion_repartidor(repartidor, usuario, estado_nuevo=EstadoOperativoRepartidor.PAUSADO, motivo="Inicio de almuerzo.")
+    else:
+        if not abierto:
+            raise ValidationError({"almuerzo": "No tiene un almuerzo activo."})
+        if (
+            not repartidor.vehiculo_id or repartidor.vehiculo.estado != EstadoVehiculo.ACTIVO
+            or repartidor.vehiculo.tipo != TipoVehiculo.MOTOCICLETA
+        ):
+            raise ValidationError({"almuerzo": "Se requiere una motocicleta activa para regresar."})
+        cerrar_almuerzos(jornada, ahora, usuario, "REGRESO")
+        registrar_operacion_repartidor(repartidor, usuario, estado_nuevo=EstadoOperativoRepartidor.DISPONIBLE, motivo="Regreso de almuerzo.")
+        from apps.solicitudes.servicios import programar_reintento_pendientes
+        from apps.solicitudes.flujo_automatico import programar_avance_automatico
+        programar_reintento_pendientes(repartidor.empresa_id)
+        programar_avance_automatico(repartidor.pk)
     return jornada
 
 
@@ -186,6 +273,7 @@ def registrar_cierre_jornada(
         raise RuntimeError(
             "El cierre requiere una transacción y el motorista y jornada bloqueados."
         )
+    cerrar_almuerzos(jornada, finalizada_en, usuario)
     resumen = _calcular_resumen(jornada, finalizada_en)
     jornada.estado = EstadoJornada.FINALIZADA
     jornada.finalizada_en = finalizada_en
@@ -245,18 +333,13 @@ def finalizar_jornada(usuario, jornada_id, datos_validados):
             {"jornada": "No puede finalizar mientras tenga asignaciones activas."}
         )
     ahora = timezone.now()
-    if settings.MODO_APLICACION == "CORPORATIVO" and repartidor.empresa_id:
-        from apps.solicitudes.vigencia import limite_dia_operativo
-
-        corte = limite_dia_operativo(jornada.iniciada_en, repartidor.empresa)
-        if ahora >= corte:
-            # Un cierre solicitado tarde conserva el corte real del día: las
-            # coordenadas actuales del teléfono no describen la medianoche.
-            return registrar_cierre_jornada(
-                jornada, repartidor, None, finalizada_en=corte,
-                motivo_medicion="FIN_DIA", motivo_estado="Fin del día operativo.",
-                finalizada_ruta_en=corte,
-            )
+    corte = corte_jornada(jornada)
+    if ahora >= corte:
+        return registrar_cierre_jornada(
+            jornada, repartidor, None, finalizada_en=corte,
+            motivo_medicion="FIN_DIA", motivo_estado="Fin del día operativo.",
+            finalizada_ruta_en=corte,
+        )
     return registrar_cierre_jornada(
         jornada,
         repartidor,

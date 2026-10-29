@@ -20,6 +20,8 @@ class JornadaRepartidor(ModeloUUIDConMarcasDeTiempo):
         default=EstadoJornada.ACTIVA,
     )
     iniciada_en = models.DateTimeField(default=timezone.now)
+    fecha_operativa = models.DateField(null=True, blank=True, editable=False)
+    cierre_programado_en = models.DateTimeField(null=True, blank=True, editable=False)
     finalizada_en = models.DateTimeField(null=True, blank=True)
     latitud_inicio = models.DecimalField(
         max_digits=9,
@@ -76,6 +78,11 @@ class JornadaRepartidor(ModeloUUIDConMarcasDeTiempo):
             ),
         ]
         constraints = [
+            models.UniqueConstraint(
+                fields=("repartidor", "fecha_operativa"),
+                condition=models.Q(fecha_operativa__isnull=False),
+                name="jornada_repart_dia_uniq",
+            ),
             models.UniqueConstraint(
                 fields=("repartidor",),
                 condition=models.Q(estado=EstadoJornada.ACTIVA),
@@ -134,3 +141,30 @@ class JornadaRepartidor(ModeloUUIDConMarcasDeTiempo):
 
     def __str__(self):
         return f"{self.repartidor} - {self.iniciada_en:%Y-%m-%d %H:%M}"
+
+    def save(self, *args, **kwargs):
+        if self._state.adding and self.estado == EstadoJornada.ACTIVA:
+            from apps.jornadas.horario import corte_operativo, periodo_operativo
+
+            empresa = self.repartidor.empresa
+            if self.fecha_operativa is None:
+                self.fecha_operativa = periodo_operativo(self.iniciada_en, empresa)[0]
+            if self.cierre_programado_en is None:
+                self.cierre_programado_en = corte_operativo(self.iniciada_en, empresa)
+        super().save(*args, **kwargs)
+
+
+class AlmuerzoJornada(ModeloUUIDConMarcasDeTiempo):
+    jornada = models.ForeignKey(JornadaRepartidor, on_delete=models.PROTECT, related_name="almuerzos")
+    iniciada_en = models.DateTimeField(default=timezone.now)
+    finalizada_en = models.DateTimeField(null=True, blank=True)
+    finalizada_por = models.ForeignKey("usuarios.Usuario", on_delete=models.PROTECT, null=True, blank=True)
+    motivo_cierre = models.CharField(max_length=32, blank=True, default="")
+
+    class Meta:
+        db_table = "almuerzos_jornada"
+        ordering = ("iniciada_en", "id")
+        constraints = [
+            models.UniqueConstraint(fields=("jornada",), condition=models.Q(finalizada_en__isnull=True), name="almuerzo_jornada_activo_uniq"),
+            models.CheckConstraint(condition=models.Q(finalizada_en__isnull=True) | models.Q(finalizada_en__gte=models.F("iniciada_en")), name="almuerzo_fechas_validas_ck"),
+        ]

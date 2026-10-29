@@ -121,10 +121,10 @@ class PruebasCierreCompartido(TestCase):
                 self.assertEqual(HistorialEstadoRepartidor.objects.count(), self.historial_inicial)
 
     @override_settings(MODO_APLICACION="EXTERNO")
-    def test_network_no_delega_cierre_automatico(self):
-        with patch("apps.jornadas.servicios.registrar_cierre_jornada") as registrar:
-            self.assertFalse(cerrar_jornada_vencida(self.jornada.pk, self.corte))
-        registrar.assert_not_called()
+    def test_network_delega_cierre_automatico(self):
+        with patch("apps.jornadas.servicios.registrar_cierre_jornada", wraps=registrar_cierre_jornada) as registrar:
+            self.assertTrue(cerrar_jornada_vencida(self.jornada.pk, self.corte))
+        registrar.assert_called_once()
 
 
 class PruebasTransaccionCierreCompartido(SimpleTestCase):

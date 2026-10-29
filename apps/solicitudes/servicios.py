@@ -188,6 +188,11 @@ def crear_solicitud(usuario, datos_validados):
             'No tiene el permiso requerido: "solicitud.crear" en este alcance.'
         )
 
+    from apps.jornadas.horario import periodo_operativo
+    ahora = timezone.now()
+    if ahora >= periodo_operativo(ahora, empresa)[2]:
+        raise ValidationError({"solicitud": "El día operativo terminó a las 22:00. Puede crear el servicio mañana."})
+
     modalidad = datos.pop("modalidad", None)
     destino_especial = datos.pop("destino_especial", None)
     destino_id = datos.pop("destino_id", None)
@@ -310,7 +315,7 @@ def _validar_rol_operativo_repartidor(repartidor, empresa):
 
 
 def _validar_repartidor_disponible(repartidor, solicitud):
-    from apps.solicitudes.vigencia import exigir_vigencia_solicitud, limite_dia_operativo
+    from apps.solicitudes.vigencia import exigir_vigencia_solicitud
 
     exigir_vigencia_solicitud(solicitud)
     # Orden de bloqueo: solicitud -> motorista -> configuración compartida.
@@ -327,12 +332,14 @@ def _validar_repartidor_disponible(repartidor, solicitud):
         raise CupoTubosInsuficiente(f"El motorista dispone de {disponibles} tubos de cupo; la solicitud requiere {solicitud.cantidad_tubos}.")
     if not repartidor.activo or not Usuario.objetos.filter(pk=repartidor.usuario_id, estado=EstadoUsuario.ACTIVO).exists():
         raise ValidationError({"repartidor_id": "El motorista no está activo."})
+    from apps.jornadas.models import JornadaRepartidor
+    from apps.jornadas.horario import jornada_vigente
+    jornada = JornadaRepartidor.objects.filter(repartidor=repartidor, estado="ACTIVA").first()
+    if not jornada_vigente(jornada):
+        raise ValidationError({"repartidor_id": "El motorista necesita una jornada vigente antes de las 22:00."})
+    if jornada.almuerzos.filter(finalizada_en__isnull=True).exists():
+        raise ValidationError({"repartidor_id": "El motorista está en almuerzo."})
     if settings.MODO_APLICACION == "CORPORATIVO":
-        from apps.jornadas.models import JornadaRepartidor
-
-        jornada = JornadaRepartidor.objects.filter(repartidor=repartidor, estado="ACTIVA").first()
-        if jornada and timezone.now() >= limite_dia_operativo(jornada.iniciada_en, solicitud.empresa):
-            raise ValidationError({"repartidor_id": "La jornada pertenece a un día operativo terminado."})
         if solicitud.reasignacion_pendiente and solicitud.estado in (
             EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO,
         ) and jornada is None:

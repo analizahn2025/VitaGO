@@ -1,7 +1,6 @@
 """Casos de uso para registrar ubicaciones enviadas por los dispositivos."""
 
 from django.db import transaction
-from django.conf import settings
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
@@ -125,9 +124,8 @@ def registrar_ubicaciones(usuario, datos_validados):
     jornada = _obtener_jornada_propia(repartidor, datos_validados["jornada_id"])
     registros = datos_validados["registros"]
     limite = timezone.now()
-    if settings.MODO_APLICACION == "CORPORATIVO" and repartidor.empresa_id:
-        from apps.solicitudes.vigencia import limite_dia_operativo
-        limite = min(limite, limite_dia_operativo(jornada.iniciada_en, repartidor.empresa))
+    from apps.jornadas.horario import corte_jornada
+    limite = min(limite, corte_jornada(jornada))
     _validar_intervalo_jornada(jornada, registros, limite)
 
     identificadores = [registro["id_cliente"] for registro in registros]

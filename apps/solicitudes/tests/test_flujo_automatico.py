@@ -131,7 +131,7 @@ class PruebasFlujoAutomatico(TestCase):
         self.assertIsNone(self._activar())
 
     def test_no_inicia_jornada_del_dia_anterior(self):
-        JornadaRepartidor.objects.filter(pk=self.jornada.pk).update(iniciada_en=self.ahora - timedelta(days=1))
+        JornadaRepartidor.objects.filter(pk=self.jornada.pk).update(iniciada_en=self.ahora - timedelta(days=1), cierre_programado_en=self.ahora - timedelta(hours=1))
         self.assertIsNone(self._activar())
 
     def test_no_inicia_si_usuario_fue_suspendido(self):

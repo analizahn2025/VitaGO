@@ -2,10 +2,8 @@
 
 import logging
 
-from django.conf import settings
 from django.db import transaction
 from django.http import Http404
-from django.utils import timezone
 from rest_framework.exceptions import APIException, ValidationError
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
@@ -35,7 +33,6 @@ def activar_siguiente_servicio(repartidor_id):
     from apps.rutas.selectores import obtener_paradas_operativas
     from apps.seguimiento.vigencia import posiciones_vigentes
     from apps.solicitudes.servicios import cambiar_estado_solicitud
-    from apps.solicitudes.vigencia import limite_dia_operativo
 
     candidato = Repartidor.objects.filter(pk=repartidor_id).first()
     if candidato is None:
@@ -64,10 +61,8 @@ def activar_siguiente_servicio(repartidor_id):
             jornada = JornadaRepartidor.objects.select_for_update(of=("self",)).filter(
                 repartidor=repartidor, estado="ACTIVA",
             ).first()
-            if jornada is None or (
-                settings.MODO_APLICACION == "CORPORATIVO" and repartidor.empresa_id
-                and timezone.now() >= limite_dia_operativo(jornada.iniciada_en, repartidor.empresa)
-            ):
+            from apps.jornadas.horario import jornada_vigente
+            if not jornada_vigente(jornada):
                 return None
             exigir_siguiente_parada(solicitud, repartidor, paradas[0]["tipo"])
             punto = posiciones_vigentes().filter(repartidor=repartidor, jornada=jornada).first()

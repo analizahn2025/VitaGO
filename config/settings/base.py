@@ -125,6 +125,7 @@ MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
+    "apps.nucleo.middleware.MiddlewareRecuperacionCierre",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -135,6 +136,7 @@ REGISTRAR_RENDIMIENTO_API = env.bool(
     "REGISTRAR_RENDIMIENTO_API",
     default=False,
 )
+HABILITAR_RECUPERACION_CIERRE = env.bool("HABILITAR_RECUPERACION_CIERRE", default=True)
 UMBRAL_API_LENTA_MS = env.float(
     "UMBRAL_API_LENTA_MS",
     default=1000.0,

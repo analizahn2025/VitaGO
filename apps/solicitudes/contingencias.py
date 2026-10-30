@@ -1,6 +1,7 @@
 """Contingencias corporativas y cierre diario de ambos modos, con trazabilidad."""
 
 import logging
+import time
 
 from django.conf import settings
 from django.db import transaction
@@ -198,10 +199,18 @@ def cerrar_jornada_vencida(jornada_id, ahora=None):
     return True
 
 
-def procesar_cierre_diario(ahora=None):
+def procesar_cierre_diario(ahora=None, *, recuperar_suspensiones=True, limite_segundos=None):
     """Cierre a las 22:00 y recuperación atrasada; conserva terminales históricos."""
     resultado = {"solicitudes_cerradas": 0, "servicios_retirados": 0, "jornadas_cerradas": 0}
     ahora = ahora or timezone.now()
+    inicio = time.monotonic()
+
+    def presupuesto_agotado():
+        if limite_segundos is not None and time.monotonic() - inicio >= limite_segundos:
+            resultado["pendiente"] = True
+            return True
+        return False
+
     def procesar_unidad(campo, funcion, *argumentos):
         try:
             resultado[campo] += int(funcion(*argumentos))
@@ -212,9 +221,8 @@ def procesar_cierre_diario(ahora=None):
     from apps.organizaciones.models import Empresa
     if settings.MODO_APLICACION == "CORPORATIVO":
         empresas_con_servicios = Solicitud.objects.filter(estado__in=ESTADOS_ABIERTOS).values("empresa_id")
-        empresas_con_jornadas = JornadaRepartidor.objects.filter(estado="ACTIVA").values("repartidor__empresa_id")
         empresas = Empresa.objects.filter(
-            Q(pk__in=empresas_con_servicios) | Q(pk__in=empresas_con_jornadas),
+            pk__in=empresas_con_servicios,
         ).select_related("pais").iterator(chunk_size=100)
     else:
         empresas = [None]  # Flota global de Network: zona operativa del servidor.
@@ -231,14 +239,19 @@ def procesar_cierre_diario(ahora=None):
             consulta = consulta.filter(empresa=empresa)
         consulta = consulta.values_list("pk", flat=True)
         for pk in consulta.iterator(chunk_size=200):
+            if presupuesto_agotado():
+                return resultado
             procesar_unidad("solicitudes_cerradas", cerrar_solicitud_vencida, pk, ahora)
-        jornadas = JornadaRepartidor.objects.filter(estado="ACTIVA", iniciada_en__lt=umbral)
-        if empresa is not None:
-            jornadas = jornadas.filter(repartidor__empresa=empresa)
-        jornadas = jornadas.values_list("pk", flat=True)
-        for pk in jornadas.iterator(chunk_size=200):
-            procesar_unidad("jornadas_cerradas", cerrar_jornada_vencida, pk, ahora)
-    if settings.MODO_APLICACION != "CORPORATIVO":
+    # La jornada conserva su corte propio aunque cambie el huso de la empresa.
+    # También recuperar registros antiguos sin empresa o sin metadatos de corte.
+    jornadas = JornadaRepartidor.objects.filter(estado="ACTIVA").filter(
+        Q(cierre_programado_en__lte=ahora) | Q(cierre_programado_en__isnull=True),
+    ).values_list("pk", flat=True)
+    for pk in jornadas.iterator(chunk_size=200):
+        if presupuesto_agotado():
+            return resultado
+        procesar_unidad("jornadas_cerradas", cerrar_jornada_vencida, pk, ahora)
+    if settings.MODO_APLICACION != "CORPORATIVO" or not recuperar_suspensiones:
         return resultado
     sin_habilitacion = anotar_rol_operativo(Repartidor.objects.all()).exclude(
         usuario__estado=EstadoUsuario.ACTIVO, tiene_rol_operativo_vigente=True,

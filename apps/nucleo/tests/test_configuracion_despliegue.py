@@ -24,6 +24,7 @@ with patch('environ.Env.read_env'):
             'origenes_web': configuracion.CORS_ALLOWED_ORIGINS,
             'proxy_https': getattr(configuracion, 'SECURE_PROXY_SSL_HEADER', None),
             'redireccion_ssl': configuracion.SECURE_SSL_REDIRECT,
+            'recuperacion_cierre': configuracion.HABILITAR_RECUPERACION_CIERRE,
             'cookies_seguras': (
                 configuracion.SESSION_COOKIE_SECURE
                 and configuracion.CSRF_COOKIE_SECURE
@@ -72,6 +73,9 @@ class PruebasConfiguracionDespliegue(SimpleTestCase):
             "URL_BASE_DATOS": "postgresql://prueba:prueba@127.0.0.1:65432/prueba",
             "SERVIDORES_PERMITIDOS": "api.example.test",
         })
+        if wsgi:
+            # Este smoke verifica HTTPS sin una base real; recuperación se prueba aparte.
+            entorno["HABILITAR_RECUPERACION_CIERRE"] = "false"
         for clave, valor in cambios.items():
             if valor is None:
                 entorno.pop(clave, None)
@@ -93,6 +97,7 @@ class PruebasConfiguracionDespliegue(SimpleTestCase):
         self.assertFalse(resultado["depuracion"])
         self.assertTrue(resultado["redireccion_ssl"])
         self.assertTrue(resultado["cookies_seguras"])
+        self.assertTrue(resultado["recuperacion_cierre"])
 
     def test_corporate_local_requiere_optar_expresamente_por_pruebas(self):
         for entorno in (None, "LOCAL", "PRODUCCION", "OTRO"):

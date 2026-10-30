@@ -10,3 +10,5 @@ MEDIA_ROOT = _almacenamiento_temporal.name
 MODO_APLICACION = "CORPORATIVO"
 PROVEEDOR_AUTENTICACION = "LOCAL"
 ALLOWED_HOSTS = ["testserver", "localhost"]
+# Las pruebas de recuperación lo habilitan explícitamente con sus propios datos.
+HABILITAR_RECUPERACION_CIERRE = False

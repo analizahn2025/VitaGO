@@ -9,6 +9,7 @@ from apps.repartidores.habilitacion import anotar_rol_operativo, tiene_rol_opera
 from apps.repartidores.limites import anotar_limites_repartidores, obtener_limites_repartidor
 from apps.repartidores.opciones import CapacidadRepartidor, EstadoOperativoRepartidor
 from apps.solicitudes.models import MovimientoEnvioEspecial, Solicitud
+from apps.solicitudes.recipientes import TIPOS_RECIPIENTE
 from apps.solicitudes.opciones import (
     ESTADOS_SOLICITUD_ACTIVOS,
     EstadoMovimientoEnvioEspecial,
@@ -22,16 +23,16 @@ ESTADOS_PRIORITARIO_EXCLUSIVO = ESTADOS_SOLICITUD_ACTIVOS
 ESTADOS_CON_TUBOS_RECOGIDOS = (EstadoSolicitud.RECOLECTADA, EstadoSolicitud.EN_TRANSITO, EstadoSolicitud.EN_DESTINO)
 
 
-def obtener_carga_tubos(repartidor):
-    campos = ("tubos_comprometidos", "tubos_en_transporte", "solicitudes_sin_cantidad_tubos")
+def obtener_carga_recipientes(repartidor):
+    campos = tuple(campo for tipo in TIPOS_RECIPIENTE for campo in (f"{tipo}_comprometidos", f"{tipo}_en_transporte", f"solicitudes_sin_cantidad_{tipo}"))
     if all(hasattr(repartidor, campo) for campo in campos):
         return {**{campo: getattr(repartidor, campo) for campo in campos}, "solicitudes_activas": repartidor.solicitudes_activas_calculadas}
-    return Solicitud.objects.filter(repartidor_asignado=repartidor, estado__in=ESTADOS_SOLICITUD_ACTIVOS).aggregate(
-        solicitudes_activas=Count("id"),
-        tubos_comprometidos=Coalesce(Sum("cantidad_tubos"), 0),
-        tubos_en_transporte=Coalesce(Sum("cantidad_tubos", filter=Q(estado__in=ESTADOS_CON_TUBOS_RECOGIDOS)), 0),
-        solicitudes_sin_cantidad_tubos=Count("id", filter=Q(cantidad_tubos__isnull=True)),
-    )
+    agregados = {"solicitudes_activas": Count("id")}
+    for tipo in TIPOS_RECIPIENTE:
+        agregados[f"{tipo}_comprometidos"] = Coalesce(Sum(f"cantidad_{tipo}"), 0)
+        agregados[f"{tipo}_en_transporte"] = Coalesce(Sum(f"cantidad_{tipo}", filter=Q(estado__in=ESTADOS_CON_TUBOS_RECOGIDOS)), 0)
+        agregados[f"solicitudes_sin_cantidad_{tipo}"] = Count("id", filter=Q(**{f"cantidad_{tipo}__isnull": True}))
+    return Solicitud.objects.filter(repartidor_asignado=repartidor, estado__in=ESTADOS_SOLICITUD_ACTIVOS).aggregate(**agregados)
 
 
 def contar_solicitudes_activas(repartidor):
@@ -41,21 +42,23 @@ def contar_solicitudes_activas(repartidor):
     ).count()
 
 
-def calcular_capacidad(cantidad, *, limite_tubos=20, limite_solicitudes=5, tubos_comprometidos=0, solicitudes_sin_cantidad_tubos=0, **_):
+def calcular_capacidad(cantidad, *, limite_tubos=20, limite_frascos=20, limite_solicitudes=5, tubos_comprometidos=0, frascos_comprometidos=0, solicitudes_sin_cantidad_tubos=0, solicitudes_sin_cantidad_frascos=0, **_):
     if cantidad <= 0:
         return CapacidadRepartidor.VACIO
-    if cantidad >= limite_solicitudes or tubos_comprometidos >= limite_tubos or solicitudes_sin_cantidad_tubos:
+    sin_espacio = tubos_comprometidos >= limite_tubos and frascos_comprometidos >= limite_frascos
+    excedido = tubos_comprometidos > limite_tubos or frascos_comprometidos > limite_frascos
+    if cantidad >= limite_solicitudes or sin_espacio or excedido or solicitudes_sin_cantidad_tubos or solicitudes_sin_cantidad_frascos:
         return CapacidadRepartidor.LLENO
     return CapacidadRepartidor.ESPACIO_DISPONIBLE
 
 
 def anotar_carga_repartidores(consulta):
     carga = Solicitud.objects.filter(repartidor_asignado_id=OuterRef("pk"), estado__in=ESTADOS_SOLICITUD_ACTIVOS).order_by().values("repartidor_asignado_id")
-    anotaciones = {
-        "tubos_comprometidos": Sum("cantidad_tubos"),
-        "tubos_en_transporte": Sum("cantidad_tubos", filter=Q(estado__in=ESTADOS_CON_TUBOS_RECOGIDOS)),
-        "solicitudes_sin_cantidad_tubos": Count("id", filter=Q(cantidad_tubos__isnull=True)),
-    }
+    anotaciones = {}
+    for tipo in TIPOS_RECIPIENTE:
+        anotaciones[f"{tipo}_comprometidos"] = Sum(f"cantidad_{tipo}")
+        anotaciones[f"{tipo}_en_transporte"] = Sum(f"cantidad_{tipo}", filter=Q(estado__in=ESTADOS_CON_TUBOS_RECOGIDOS))
+        anotaciones[f"solicitudes_sin_cantidad_{tipo}"] = Count("id", filter=Q(**{f"cantidad_{tipo}__isnull": True}))
     prioritarias = Solicitud.objects.filter(
         repartidor_asignado_id=OuterRef("pk"),
         prioridad=PrioridadSolicitud.PRIORITARIA,
@@ -79,9 +82,9 @@ def anotar_carga_repartidores(consulta):
     )
 
 
-def filtrar_repartidores_disponibles(consulta, cantidad_tubos=1):
+def filtrar_repartidores_disponibles(consulta, cantidad_tubos=0, cantidad_frascos=0):
     """Aplica la misma elegibilidad a listados y asignación automática."""
-    return consulta.filter(
+    consulta = consulta.filter(
         activo=True,
         usuario__estado=EstadoUsuario.ACTIVO,
         tiene_rol_operativo_vigente=True,
@@ -89,7 +92,9 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=1):
         en_almuerzo=False,
         solicitudes_activas_calculadas__lt=F("limite_solicitudes_efectivo"),
         solicitudes_sin_cantidad_tubos=0,
+        solicitudes_sin_cantidad_frascos=0,
         limite_tubos_efectivo__gte=F("tubos_comprometidos") + cantidad_tubos,
+        limite_frascos_efectivo__gte=F("frascos_comprometidos") + cantidad_frascos,
         lleva_prioritario_exclusivo=False,
         tiene_especial_activo=False,
         vehiculo__estado=EstadoVehiculo.ACTIVO,
@@ -101,6 +106,9 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=1):
             solicitudes_activas_calculadas__gt=0,
         )
     )
+    if not (cantidad_tubos or cantidad_frascos):
+        consulta = consulta.filter(Q(limite_tubos_efectivo__gt=F("tubos_comprometidos")) | Q(limite_frascos_efectivo__gt=F("frascos_comprometidos")))
+    return consulta
 
 
 def puede_recibir_solicitudes(repartidor, cantidad=None, *, carga=None):
@@ -124,8 +132,12 @@ def puede_recibir_solicitudes(repartidor, cantidad=None, *, carga=None):
         cantidad = contar_solicitudes_activas(repartidor)
     if cantidad >= limites["limite_solicitudes"]:
         return False
-    carga = obtener_carga_tubos(repartidor) if carga is None else carga
-    if carga["solicitudes_sin_cantidad_tubos"] or carga["tubos_comprometidos"] >= limites["limite_tubos"]:
+    carga = obtener_carga_recipientes(repartidor) if carga is None else carga
+    if any(carga[f"solicitudes_sin_cantidad_{tipo}"] for tipo in TIPOS_RECIPIENTE):
+        return False
+    if any(carga[f"{tipo}_comprometidos"] > limites[f"limite_{tipo}"] for tipo in TIPOS_RECIPIENTE):
+        return False
+    if all(carga[f"{tipo}_comprometidos"] >= limites[f"limite_{tipo}"] for tipo in TIPOS_RECIPIENTE):
         return False
     if not repartidor.activo or repartidor.usuario.estado != EstadoUsuario.ACTIVO:
         return False

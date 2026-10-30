@@ -7,7 +7,7 @@ from apps.flota.serializadores import SerializadorVehiculo
 from apps.repartidores.capacidad import (
     calcular_capacidad,
     puede_recibir_solicitudes,
-    obtener_carga_tubos,
+    obtener_carga_recipientes,
 )
 from apps.repartidores.models import Repartidor
 from apps.repartidores.limites import obtener_limites_repartidor
@@ -46,6 +46,7 @@ class SerializadorResumenMotorista(serializers.Serializer):
     generado_en = serializers.DateTimeField()
     solicitudes = serializers.JSONField()
     tubos = serializers.JSONField()
+    frascos = serializers.JSONField()
     kilometraje = serializers.JSONField()
     temperaturas = serializers.JSONField()
     carga_actual = serializers.JSONField()
@@ -68,6 +69,12 @@ class SerializadorRepartidor(serializers.ModelSerializer):
     solicitudes_activas = serializers.SerializerMethodField()
     limite_solicitudes = serializers.SerializerMethodField()
     limite_tubos = serializers.SerializerMethodField()
+    limite_frascos = serializers.SerializerMethodField()
+    frascos_comprometidos = serializers.SerializerMethodField()
+    frascos_en_transporte = serializers.SerializerMethodField()
+    frascos_reservados = serializers.SerializerMethodField()
+    frascos_disponibles = serializers.SerializerMethodField()
+    solicitudes_sin_cantidad_frascos = serializers.SerializerMethodField()
     puede_recibir_solicitudes = serializers.SerializerMethodField()
     tubos_comprometidos = serializers.SerializerMethodField()
     tubos_en_transporte = serializers.SerializerMethodField()
@@ -95,11 +102,31 @@ class SerializadorRepartidor(serializers.ModelSerializer):
         if not hasattr(self, "_cargas_tubos"):
             self._cargas_tubos = {}
         if repartidor.pk not in self._cargas_tubos:
-            self._cargas_tubos[repartidor.pk] = obtener_carga_tubos(repartidor)
+            self._cargas_tubos[repartidor.pk] = obtener_carga_recipientes(repartidor)
         return self._cargas_tubos[repartidor.pk]
 
     def get_tubos_comprometidos(self, repartidor):
         return self._carga(repartidor)["tubos_comprometidos"]
+
+    def get_frascos_comprometidos(self, repartidor):
+        return self._carga(repartidor)["frascos_comprometidos"]
+
+    def get_frascos_en_transporte(self, repartidor):
+        return self._carga(repartidor)["frascos_en_transporte"]
+
+    def get_frascos_reservados(self, repartidor):
+        carga = self._carga(repartidor)
+        return carga["frascos_comprometidos"] - carga["frascos_en_transporte"]
+
+    def get_frascos_disponibles(self, repartidor):
+        carga = self._carga(repartidor)
+        return 0 if carga["solicitudes_sin_cantidad_frascos"] else max(0, self._limites(repartidor)["limite_frascos"] - carga["frascos_comprometidos"])
+
+    def get_solicitudes_sin_cantidad_frascos(self, repartidor):
+        return self._carga(repartidor)["solicitudes_sin_cantidad_frascos"]
+
+    def get_limite_frascos(self, repartidor):
+        return self._limites(repartidor)["limite_frascos"]
 
     def get_tubos_en_transporte(self, repartidor):
         return self._carga(repartidor)["tubos_en_transporte"]
@@ -154,6 +181,8 @@ class SerializadorRepartidor(serializers.ModelSerializer):
             "limite_solicitudes",
             "limite_tubos", "tubos_comprometidos", "tubos_en_transporte", "tubos_reservados",
             "tubos_disponibles", "solicitudes_sin_cantidad_tubos",
+            "limite_frascos", "frascos_comprometidos", "frascos_en_transporte", "frascos_reservados",
+            "frascos_disponibles", "solicitudes_sin_cantidad_frascos",
             "puede_recibir_solicitudes",
             "activo",
             "creado_en",
@@ -169,7 +198,8 @@ class SerializadorCreacionRepartidor(serializers.Serializer):
 
 class SerializadorConsultaRepartidores(serializers.Serializer):
     en_almuerzo = serializers.BooleanField(required=False)
-    cantidad_tubos = serializers.IntegerField(min_value=1, max_value=2147483647, required=False)
+    cantidad_tubos = serializers.IntegerField(min_value=0, max_value=2147483647, required=False)
+    cantidad_frascos = serializers.IntegerField(min_value=0, max_value=2147483647, required=False)
     empresa_id = serializers.UUIDField(required=False)
     estado_operativo = serializers.ChoiceField(
         choices=EstadoOperativoRepartidor.choices, required=False

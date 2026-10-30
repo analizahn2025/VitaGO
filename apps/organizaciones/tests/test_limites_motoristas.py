@@ -16,7 +16,7 @@ from apps.repartidores.limites import obtener_limites_repartidor
 from apps.repartidores.models import Repartidor
 from apps.repartidores.selectores import listar_repartidores_disponibles
 from apps.repartidores.tests import test_cupo_tubos as datos_cupo
-from apps.solicitudes.excepciones import CupoTubosInsuficiente, LimiteSolicitudesRepartidor
+from apps.solicitudes.excepciones import CupoRecipientesInsuficiente, LimiteSolicitudesRepartidor
 from apps.solicitudes.servicios import asignar_solicitud_manualmente
 from apps.solicitudes.tests import test_asignaciones as datos
 from apps.usuarios.models import Permiso, PermisoRol, Rol, RolUsuario, Usuario
@@ -118,7 +118,7 @@ class PruebasLimitesCompartidos(TestCase):
         self.assertEqual(respuesta.data["alcance"], "EMPRESA")
         self.assertEqual(respuesta.data["limite_solicitudes"], 3)
         detalle = cliente.get(reverse("organizaciones:detalle-empresa", args=[self.empresa.pk]))
-        self.assertEqual(detalle.data["limites_motoristas"], {"alcance": "EMPRESA", "limite_tubos": 25, "limite_solicitudes": 3})
+        self.assertEqual(detalle.data["limites_motoristas"], {"alcance": "EMPRESA", "limite_tubos": 25, "limite_frascos": 20, "limite_solicitudes": 3})
 
     def test_api_no_acepta_campos_o_limites_invalidos(self):
         cliente = self._cliente()
@@ -156,7 +156,7 @@ class PruebasLimitesCompartidos(TestCase):
         asignar_solicitud_manualmente(self.administrador, solicitud.pk, {"repartidor_id": self.repartidores[0].pk})
         self.assertEqual(self._perfil()["tubos_comprometidos"], 25)
         for r in self.repartidores:
-            self.assertEqual(obtener_limites_repartidor(Repartidor.objects.get(pk=r.pk)), {"limite_tubos": 25, "limite_solicitudes": 3})
+            self.assertEqual(obtener_limites_repartidor(Repartidor.objects.get(pk=r.pk)), {"limite_tubos": 25, "limite_frascos": 20, "limite_solicitudes": 3})
         self.assertEqual(HistorialLimitesMotoristas.objects.get().empresa_id, None)
 
     @override_settings(MODO_APLICACION="EXTERNO")
@@ -164,7 +164,7 @@ class PruebasLimitesCompartidos(TestCase):
         self._preparar_red()
         configurar_limites_red(self.administrador, {"limite_tubos": 19})
         self._asignar(18)
-        with self.assertRaises(CupoTubosInsuficiente):
+        with self.assertRaises(CupoRecipientesInsuficiente):
             self._asignar(2)
         self.assertFalse(listar_repartidores_disponibles(self.administrador, {"cantidad_tubos": 2}).filter(pk=self.repartidores[0].pk).exists())
 

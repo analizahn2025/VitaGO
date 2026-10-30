@@ -2,6 +2,7 @@ from django.urls import include, path
 
 from apps.seguimiento.vistas import VistaSeguimientoSolicitud
 from apps.solicitudes.vistas import (
+    VistaCargaSolicitud,
     VistaAgrupacionesSolicitudes,
     VistaAsignacionSolicitud,
     VistaDetalleSolicitud,
@@ -17,6 +18,7 @@ from apps.solicitudes.vistas import (
 app_name = "solicitudes"
 
 urlpatterns = [
+    path("<uuid:solicitud_id>/carga/", VistaCargaSolicitud.as_view(), name="carga"),
     path("<uuid:solicitud_id>/cantidad-tubos/", VistaCantidadTubosSolicitud.as_view(), name="cantidad-tubos"),
     path("<uuid:solicitud_id>/sincronizacion-gps/", VistaSincronizacionGPSMovimiento.as_view(), name="sincronizacion-gps"),
     path(

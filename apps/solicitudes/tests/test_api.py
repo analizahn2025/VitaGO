@@ -35,13 +35,6 @@ class PruebasAPISolicitudes(SimpleTestCase):
             "tipo_servicio_id": str(uuid.uuid4()),
             "origen_id": str(uuid.uuid4()),
             "destino_id": str(uuid.uuid4()),
-            "articulos": [
-                {
-                    "tipo_articulo": "Muestra de laboratorio",
-                    "cantidad": "1.00",
-                    "codigo_referencia": "REF-001",
-                }
-            ],
         }
         datos.update(cambios)
         return datos
@@ -125,7 +118,7 @@ class PruebasAPISolicitudes(SimpleTestCase):
         self.assertEqual(respuesta.status_code, 200)
         obtener.assert_called_once_with(self.usuario, solicitud_id)
 
-    def test_creacion_exige_al_menos_un_articulo(self):
+    def test_creacion_rechaza_articulos_aunque_esten_vacios(self):
         serializador = SerializadorCreacionSolicitud(
             data=self._datos_creacion(articulos=[])
         )
@@ -133,7 +126,7 @@ class PruebasAPISolicitudes(SimpleTestCase):
         self.assertFalse(serializador.is_valid())
         self.assertIn("articulos", serializador.errors)
 
-    def test_creacion_rechaza_cantidad_no_positiva(self):
+    def test_creacion_rechaza_articulos_del_contrato_anterior(self):
         serializador = SerializadorCreacionSolicitud(
             data=self._datos_creacion(
                 articulos=[

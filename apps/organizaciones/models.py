@@ -7,6 +7,7 @@ from apps.organizaciones.opciones import EstadoOrganizacion
 class Empresa(ModeloUUIDConMarcasDeTiempo):
     nombre = models.CharField(max_length=200)
     limite_tubos_por_motorista = models.PositiveIntegerField(default=20)
+    limite_frascos_por_motorista = models.PositiveIntegerField(default=20)
     limite_solicitudes_por_motorista = models.PositiveSmallIntegerField(default=5)
     razon_social = models.CharField(max_length=250, null=True, blank=True)
     identificacion_fiscal = models.CharField(max_length=64, null=True, blank=True)
@@ -36,6 +37,7 @@ class Empresa(ModeloUUIDConMarcasDeTiempo):
         verbose_name = "empresa"
         verbose_name_plural = "empresas"
         constraints = [
+            models.CheckConstraint(condition=models.Q(limite_frascos_por_motorista__gte=1), name="empresa_limite_frascos_ck"),
             models.CheckConstraint(
                 condition=models.Q(limite_tubos_por_motorista__gte=1),
                 name="empresa_limite_tubos_ck",
@@ -53,6 +55,7 @@ class Empresa(ModeloUUIDConMarcasDeTiempo):
 class LimitesMotoristasRed(ModeloConMarcasDeTiempo):
     id = models.PositiveSmallIntegerField(primary_key=True, default=1, editable=False)
     limite_tubos_por_motorista = models.PositiveIntegerField(default=20)
+    limite_frascos_por_motorista = models.PositiveIntegerField(default=20)
     limite_solicitudes_por_motorista = models.PositiveSmallIntegerField(default=5)
 
     class Meta:
@@ -60,6 +63,7 @@ class LimitesMotoristasRed(ModeloConMarcasDeTiempo):
         constraints = [
             models.CheckConstraint(condition=models.Q(id=1), name="limites_red_unica_fila_ck"),
             models.CheckConstraint(condition=models.Q(limite_tubos_por_motorista__gte=1), name="limites_red_tubos_ck"),
+            models.CheckConstraint(condition=models.Q(limite_frascos_por_motorista__gte=1), name="limites_red_frascos_ck"),
             models.CheckConstraint(
                 condition=models.Q(limite_solicitudes_por_motorista__gte=1, limite_solicitudes_por_motorista__lte=5),
                 name="limites_red_solicitudes_ck",

@@ -8,7 +8,7 @@ from django.db.models.functions import Coalesce
 from apps.organizaciones.models import Empresa, LimitesMotoristasRed
 
 
-LIMITES_PREDETERMINADOS = {"limite_tubos": 20, "limite_solicitudes": 5}
+LIMITES_PREDETERMINADOS = {"limite_tubos": 20, "limite_frascos": 20, "limite_solicitudes": 5}
 CAMPOS_LIMITES = {clave: clave + "_por_motorista" for clave in LIMITES_PREDETERMINADOS}
 
 

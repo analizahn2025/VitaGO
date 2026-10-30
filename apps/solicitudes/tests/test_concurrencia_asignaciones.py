@@ -20,7 +20,7 @@ from apps.jornadas.models import JornadaRepartidor
 from apps.notificaciones.models import NotificacionUsuario
 from apps.notificaciones.opciones import TipoNotificacion
 from apps.organizaciones.models import Empresa, Sucursal
-from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas, obtener_carga_tubos
+from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas, obtener_carga_recipientes
 from apps.repartidores.models import Repartidor
 from apps.repartidores.selectores import listar_repartidores_disponibles
 from apps.rutas.models import RutaRepartidor
@@ -132,7 +132,6 @@ class PruebasConcurrenciaAsignaciones(TransactionTestCase):
             "origen_id": str(self.ubicaciones[0].pk), "destino_id": str(self.ubicaciones[1].pk),
             "modalidad": "ENTRE_SUCURSALES", "prioridad": prioridad,
             "tipo_servicio_id": str(self.tipo_servicio.pk),
-            "articulos": [{"tipo_articulo": "Documentos", "cantidad": 1}],
         })
 
     def _pendiente(self):
@@ -202,7 +201,7 @@ class PruebasConcurrenciaAsignaciones(TransactionTestCase):
             repartidor.refresh_from_db()
             cantidad = contar_solicitudes_activas(repartidor)
             self.assertLessEqual(cantidad, 5)
-            self.assertEqual(repartidor.capacidad, calcular_capacidad(cantidad, limite_tubos=repartidor.limite_tubos, **obtener_carga_tubos(repartidor)))
+            self.assertEqual(repartidor.capacidad, calcular_capacidad(cantidad, limite_tubos=repartidor.limite_tubos, **obtener_carga_recipientes(repartidor)))
             ruta = RutaRepartidor.objects.filter(repartidor=repartidor, estado="ACTIVA").first()
             paradas = obtener_paradas_operativas(repartidor)
             if ruta is None:
@@ -408,6 +407,6 @@ class PruebasConcurrenciaAsignaciones(TransactionTestCase):
             lambda s=s: self._asignar(s, self.repartidores[0]) for s in solicitudes
         ], sincronizar_motoristas=True)
         self.assertEqual(sorted(estado for estado, _ in resultados), [201, 409])
-        from apps.repartidores.capacidad import obtener_carga_tubos
-        self.assertEqual(obtener_carga_tubos(self.repartidores[0])["tubos_comprometidos"], 20)
+        from apps.repartidores.capacidad import obtener_carga_recipientes
+        self.assertEqual(obtener_carga_recipientes(self.repartidores[0])["tubos_comprometidos"], 20)
         self._comprobar_integridad()

@@ -32,6 +32,7 @@ from apps.solicitudes.serializadores import (
     SerializadorTransicionSolicitud,
     SerializadorPuntoCreacionSolicitud,
     SerializadorActualizacionTubos,
+    SerializadorActualizacionCarga,
 )
 from apps.solicitudes.servicios import (
     asignar_solicitud_manualmente,
@@ -180,13 +181,18 @@ class VistaDetalleSolicitud(APIView):
 
 class VistaCantidadTubosSolicitud(APIView):
     permission_classes = (IsAuthenticated,)
+    serializador_entrada = SerializadorActualizacionTubos
 
     def patch(self, request, solicitud_id):
-        from apps.solicitudes.carga import actualizar_cantidad_tubos
-        entrada = SerializadorActualizacionTubos(data=request.data)
+        from apps.solicitudes.carga import actualizar_carga_recipientes
+        entrada = self.serializador_entrada(data=request.data)
         entrada.is_valid(raise_exception=True)
-        solicitud = actualizar_cantidad_tubos(request.user, solicitud_id, entrada.validated_data)
+        solicitud = actualizar_carga_recipientes(request.user, solicitud_id, entrada.validated_data)
         return Response(SerializadorSolicitudDetalle(solicitud).data)
+
+
+class VistaCargaSolicitud(VistaCantidadTubosSolicitud):
+    serializador_entrada = SerializadorActualizacionCarga
 
 
 class VistaAsignacionSolicitud(APIView):

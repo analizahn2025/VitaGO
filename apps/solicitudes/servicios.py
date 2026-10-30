@@ -6,25 +6,23 @@ import uuid
 from django.conf import settings
 from django.db import transaction
 from django.db.models import Q, Subquery
-from django.core.exceptions import ValidationError as ValidacionModelo
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
 from apps.solicitudes.asignacion_automatica import candidatos_ordenados
-from apps.solicitudes.carga import validar_cantidad_tubos
+from apps.solicitudes.recipientes import TIPOS_RECIPIENTE, validar_cantidades_recipientes
 from apps.solicitudes.cobertura import comparten_departamento, departamento_normalizado
 from apps.organizaciones.models import Empresa, Sucursal
 from apps.organizaciones.opciones import EstadoOrganizacion
 from apps.solicitudes.excepciones import (
     CreacionSolicitudNoDisponible,
     LimiteSolicitudesRepartidor,
-    CupoTubosInsuficiente,
+    CupoRecipientesInsuficiente,
 )
 from apps.solicitudes.models import (
     AsignacionSolicitud,
-    ArticuloSolicitud,
     EventoSolicitud,
     MovimientoEnvioEspecial,
     Solicitud,
@@ -48,7 +46,7 @@ from apps.repartidores.operacion import registrar_operacion_repartidor
 from apps.repartidores.capacidad import (
     contar_solicitudes_activas,
     sincronizar_capacidad_repartidor,
-    obtener_carga_tubos,
+    obtener_carga_recipientes,
 )
 from apps.repartidores.opciones import EstadoOperativoRepartidor
 from apps.repartidores.habilitacion import roles_operativos_vigentes
@@ -172,8 +170,11 @@ def crear_solicitud(usuario, datos_validados):
         raise CreacionSolicitudNoDisponible()
 
     datos = dict(datos_validados)
-    validar_cantidad_tubos(datos.get("cantidad_tubos"))
-    articulos_datos = datos.pop("articulos")
+    if "articulos" in datos:
+        raise ValidationError({"articulos": "Los artículos fueron retirados. Declare únicamente tubos y frascos."})
+    datos.setdefault("cantidad_tubos", 0)
+    datos.setdefault("cantidad_frascos", 0)
+    validar_cantidades_recipientes(datos["cantidad_tubos"], datos["cantidad_frascos"])
     empresa, sucursal = _obtener_empresa_y_sucursal(
         datos.pop("empresa_id"),
         datos.pop("sucursal_id", None),
@@ -274,21 +275,6 @@ def crear_solicitud(usuario, datos_validados):
         estado=EstadoSolicitud.PENDIENTE,
         **datos,
     )
-    articulos = [
-        ArticuloSolicitud(solicitud=solicitud, **datos_articulo)
-        for datos_articulo in articulos_datos
-    ]
-    for indice, articulo in enumerate(articulos):
-        try:
-            articulo.full_clean()
-        except ValidacionModelo as error:
-            detalles = [
-                {"indice": indice, "campo": campo, "mensaje": mensaje}
-                for campo, mensajes in error.message_dict.items()
-                for mensaje in mensajes
-            ]
-            raise ValidationError({"articulos": detalles}) from error
-    ArticuloSolicitud.objects.bulk_create(articulos)
     EventoSolicitud.objects.create(
         solicitud=solicitud,
         tipo=TipoEventoSolicitud.CREADA,
@@ -323,13 +309,15 @@ def _validar_repartidor_disponible(repartidor, solicitud):
     cantidad = contar_solicitudes_activas(repartidor)
     if cantidad >= limites["limite_solicitudes"]:
         raise LimiteSolicitudesRepartidor(limites["limite_solicitudes"])
-    validar_cantidad_tubos(solicitud.cantidad_tubos)
-    carga = obtener_carga_tubos(repartidor)
-    if carga["solicitudes_sin_cantidad_tubos"]:
-        raise CupoTubosInsuficiente("Debe completar la cantidad de tubos de las solicitudes activas del motorista.")
-    disponibles = max(0, limites["limite_tubos"] - carga["tubos_comprometidos"])
-    if solicitud.cantidad_tubos > disponibles:
-        raise CupoTubosInsuficiente(f"El motorista dispone de {disponibles} tubos de cupo; la solicitud requiere {solicitud.cantidad_tubos}.")
+    validar_cantidades_recipientes(solicitud.cantidad_tubos, solicitud.cantidad_frascos)
+    carga = obtener_carga_recipientes(repartidor)
+    for tipo in TIPOS_RECIPIENTE:
+        if carga[f"solicitudes_sin_cantidad_{tipo}"]:
+            raise CupoRecipientesInsuficiente(f"Debe completar la cantidad de {tipo} de las solicitudes activas del motorista.")
+        disponibles = max(0, limites[f"limite_{tipo}"] - carga[f"{tipo}_comprometidos"])
+        requerida = getattr(solicitud, f"cantidad_{tipo}")
+        if requerida > disponibles:
+            raise CupoRecipientesInsuficiente(f"El motorista dispone de {disponibles} {tipo} de cupo; la solicitud requiere {requerida}.")
     if not repartidor.activo or not Usuario.objetos.filter(pk=repartidor.usuario_id, estado=EstadoUsuario.ACTIVO).exists():
         raise ValidationError({"repartidor_id": "El motorista no está activo."})
     from apps.jornadas.models import JornadaRepartidor
@@ -629,7 +617,7 @@ def _asignar_automaticamente(solicitud, usuario):
             continue
         try:
             _validar_repartidor_disponible(repartidor, solicitud)
-        except (ValidationError, LimiteSolicitudesRepartidor, CupoTubosInsuficiente):
+        except (ValidationError, LimiteSolicitudesRepartidor, CupoRecipientesInsuficiente):
             continue
         from apps.seguimiento.vigencia import posiciones_vigentes
 
@@ -668,7 +656,7 @@ def _reintentar_primera_solicitud_pendiente(empresa_id, excluir_ids=()):
         )
         .filter(Q(estado=EstadoSolicitud.PENDIENTE) | Q(reasignacion_pendiente=True, estado__in=ESTADOS_SOLICITUD_ACTIVOS))
         .exclude(pk__in=excluir_ids)
-        .filter(cantidad_tubos__isnull=False)
+        .filter(cantidad_tubos__isnull=False, cantidad_frascos__isnull=False)
         .order_by("-reasignacion_pendiente", "creado_en", "id")
         .first()
     )
@@ -962,7 +950,7 @@ def cambiar_estado_solicitud(usuario, identificador_solicitud, datos_validados, 
         })
 
     if estado_destino == EstadoSolicitud.RECOLECTADA:
-        validar_cantidad_tubos(solicitud.cantidad_tubos)
+        validar_cantidades_recipientes(solicitud.cantidad_tubos, solicitud.cantidad_frascos)
         from apps.evidencias.models import EvidenciaSolicitud
         from apps.evidencias.opciones import TipoEvidenciaSolicitud
 

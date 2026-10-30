@@ -12,7 +12,7 @@ from apps.organizaciones.opciones import EstadoOrganizacion
 from apps.repartidores.models import Repartidor
 from apps.repartidores.habilitacion import roles_operativos_vigentes
 from apps.repartidores.operacion import guardar_cambio_operativo
-from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas, obtener_carga_tubos
+from apps.repartidores.capacidad import calcular_capacidad, contar_solicitudes_activas, obtener_carga_recipientes
 from apps.repartidores.limites import obtener_limites_repartidor
 from apps.repartidores.opciones import EstadoOperativoRepartidor
 from apps.usuarios.models import Usuario
@@ -170,7 +170,7 @@ def actualizar_operacion_repartidor(usuario, identificador_repartidor, cambios):
     estado_anterior = repartidor.estado_operativo
     capacidad_anterior = repartidor.capacidad
     estado_nuevo = cambios.get("estado_operativo", estado_anterior)
-    capacidad_nueva = calcular_capacidad(contar_solicitudes_activas(repartidor), **obtener_limites_repartidor(repartidor), **obtener_carga_tubos(repartidor))
+    capacidad_nueva = calcular_capacidad(contar_solicitudes_activas(repartidor), **obtener_limites_repartidor(repartidor), **obtener_carga_recipientes(repartidor))
     if estado_nuevo == estado_anterior and capacidad_nueva == capacidad_anterior:
         raise ValidationError("La operación no contiene cambios efectivos.")
     from apps.jornadas.models import JornadaRepartidor

@@ -52,6 +52,7 @@ def _crear_parada(solicitud, tipo, ubicacion=None):
         "solicitud_id": solicitud.id,
         "numero_solicitud": solicitud.numero,
         "cantidad_tubos": solicitud.cantidad_tubos,
+        "cantidad_frascos": solicitud.cantidad_frascos,
         "prioridad": solicitud.prioridad,
         "modalidad": solicitud.modalidad,
         "estado_solicitud": solicitud.estado,

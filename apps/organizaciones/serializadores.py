@@ -17,10 +17,12 @@ class SerializadorPaisOrganizacion(serializers.Serializer):
 
 class SerializadorLimitesMotoristas(serializers.Serializer):
     limite_tubos = serializers.IntegerField(source="limite_tubos_por_motorista", read_only=True)
+    limite_frascos = serializers.IntegerField(source="limite_frascos_por_motorista", read_only=True)
     limite_solicitudes = serializers.IntegerField(source="limite_solicitudes_por_motorista", read_only=True)
 
 class SerializadorConfiguracionLimitesMotoristas(serializers.Serializer):
     limite_tubos = serializers.IntegerField(min_value=1, max_value=2147483647, required=False)
+    limite_frascos = serializers.IntegerField(min_value=1, max_value=2147483647, required=False)
     limite_solicitudes = serializers.IntegerField(min_value=1, max_value=5, required=False)
     motivo = serializers.CharField(max_length=1000, required=False, allow_blank=True)
 
@@ -28,7 +30,7 @@ class SerializadorConfiguracionLimitesMotoristas(serializers.Serializer):
         desconocidos = set(self.initial_data) - set(self.fields)
         if desconocidos:
             raise serializers.ValidationError({campo: "Campo no permitido." for campo in sorted(desconocidos)})
-        if not ({"limite_tubos", "limite_solicitudes"} & atributos.keys()):
+        if not ({"limite_tubos", "limite_frascos", "limite_solicitudes"} & atributos.keys()):
             raise serializers.ValidationError({"detail": "Debe indicar al menos un límite."})
         return atributos
 

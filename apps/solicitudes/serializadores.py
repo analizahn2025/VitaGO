@@ -173,6 +173,7 @@ class SerializadorSolicitudResumen(serializers.ModelSerializer):
             "id",
             "numero",
             "cantidad_tubos",
+            "cantidad_frascos",
             "empresa_id",
             "sucursal_id",
             "sucursal",
@@ -201,7 +202,7 @@ class SerializadorEntregaResumenDiario(SerializadorSolicitudResumen):
 
 
 class SerializadorSolicitudDetalle(SerializadorSolicitudResumen):
-    articulos = SerializadorArticuloSolicitud(many=True, read_only=True)
+    articulos_historicos = SerializadorArticuloSolicitud(source="articulos", many=True, read_only=True)
     eventos = SerializadorEventoSolicitud(many=True, read_only=True)
     asignaciones = SerializadorAsignacionSolicitud(many=True, read_only=True)
     movimiento_especial = serializers.SerializerMethodField()
@@ -217,7 +218,7 @@ class SerializadorSolicitudDetalle(SerializadorSolicitudResumen):
     class Meta(SerializadorSolicitudResumen.Meta):
         fields = SerializadorSolicitudResumen.Meta.fields + (
             "notas",
-            "articulos",
+            "articulos_historicos",
             "eventos",
             "asignaciones",
             "movimiento_especial",
@@ -232,40 +233,9 @@ class SerializadorSolicitudDetalle(SerializadorSolicitudResumen):
         )
 
 
-class SerializadorArticuloCreacion(serializers.Serializer):
-    tipo_articulo = serializers.CharField(max_length=100)
-    descripcion = serializers.CharField(
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-    )
-    cantidad = serializers.DecimalField(
-        max_digits=12,
-        decimal_places=2,
-        min_value=Decimal("0.01"),
-        default=Decimal("1"),
-    )
-    codigo_referencia = serializers.CharField(
-        max_length=120,
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-    )
-    condicion_transporte = serializers.CharField(
-        max_length=200,
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-    )
-    notas = serializers.CharField(
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-    )
-
-
 class SerializadorCreacionSolicitud(serializers.Serializer):
-    cantidad_tubos = serializers.IntegerField(min_value=1, max_value=2147483647)
+    cantidad_tubos = serializers.IntegerField(min_value=0, max_value=2147483647, default=0)
+    cantidad_frascos = serializers.IntegerField(min_value=0, max_value=2147483647, default=0)
     empresa_id = serializers.UUIDField()
     sucursal_id = serializers.UUIDField(required=False, allow_null=True)
     prioridad = serializers.ChoiceField(choices=PrioridadSolicitud.choices)
@@ -287,12 +257,36 @@ class SerializadorCreacionSolicitud(serializers.Serializer):
         allow_blank=True,
         allow_null=True,
     )
-    articulos = SerializadorArticuloCreacion(many=True, allow_empty=False)
+    def validate(self, atributos):
+        if "articulos" in self.initial_data:
+            raise serializers.ValidationError({"articulos": "Los artículos fueron retirados. Declare únicamente tubos y frascos."})
+        from apps.solicitudes.recipientes import validar_cantidades_recipientes
+        validar_cantidades_recipientes(atributos["cantidad_tubos"], atributos["cantidad_frascos"])
+        return atributos
 
 
 class SerializadorActualizacionTubos(serializers.Serializer):
-    cantidad_tubos = serializers.IntegerField(min_value=1, max_value=2147483647)
+    cantidad_tubos = serializers.IntegerField(min_value=0, max_value=2147483647)
     motivo = serializers.CharField(max_length=1000, allow_blank=False)
+
+    def validate(self, atributos):
+        if "cantidad_frascos" in self.initial_data:
+            raise serializers.ValidationError({"cantidad_frascos": "Use la ruta de carga para corregir tubos y frascos."})
+        return atributos
+
+
+class SerializadorActualizacionCarga(serializers.Serializer):
+    cantidad_tubos = serializers.IntegerField(min_value=0, max_value=2147483647, required=False)
+    cantidad_frascos = serializers.IntegerField(min_value=0, max_value=2147483647, required=False)
+    motivo = serializers.CharField(max_length=1000, allow_blank=False)
+
+    def validate(self, atributos):
+        desconocidos = set(self.initial_data) - set(self.fields)
+        if desconocidos:
+            raise serializers.ValidationError({campo: "Campo no permitido." for campo in desconocidos})
+        if not {"cantidad_tubos", "cantidad_frascos"} & atributos.keys():
+            raise serializers.ValidationError({"detail": "Debe indicar tubos o frascos para corregir la carga."})
+        return atributos
 
 
 class SerializadorConsultaSolicitudes(serializers.Serializer):

@@ -369,7 +369,6 @@ SIMPLE_JWT = {
 }
 
 REST_FRAMEWORK = {
-    "EXCEPTION_HANDLER": "apps.nucleo.excepciones.manejador_excepciones",
     "DEFAULT_AUTHENTICATION_CLASSES": (
         "apps.autenticacion.autenticadores.AutenticacionVitaGo",
     ),

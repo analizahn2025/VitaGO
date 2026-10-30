@@ -1,8 +1,8 @@
 from django.test import SimpleTestCase
 from rest_framework.exceptions import ValidationError
+from rest_framework.views import exception_handler
 
 from apps.flota.serializadores import SerializadorCreacionVehiculo
-from apps.nucleo.excepciones import manejador_excepciones
 from apps.repartidores.serializadores import SerializadorActualizacionOperacionRepartidor
 
 
@@ -26,13 +26,12 @@ class PruebasContratoValidaciones(SimpleTestCase):
         self.assertFalse(serializador.is_valid())
         self.assertIn("capacidad", serializador.errors)
 
-    def test_error_articulo_incluye_indice_y_campo(self):
-        respuesta = manejador_excepciones(
+    def test_error_conserva_nombre_del_campo_de_recipiente(self):
+        respuesta = exception_handler(
             ValidationError(
-                {"articulos": [{}, {"cantidad": ["Debe ser positiva."]}]}
+                {"cantidad_frascos": "Debe indicar una cantidad válida."}
             ),
             {},
         )
         self.assertEqual(respuesta.status_code, 400)
-        self.assertEqual(respuesta.data["articulos"][0]["indice"], 1)
-        self.assertEqual(respuesta.data["articulos"][0]["campo"], "cantidad")
+        self.assertIn("cantidad_frascos", respuesta.data)

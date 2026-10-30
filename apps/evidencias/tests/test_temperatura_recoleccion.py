@@ -38,6 +38,14 @@ class PruebasTemperaturaRecoleccion(TestCase):
         self.assertFalse(EvidenciaSolicitud.objects.exists())
         self.solicitud.refresh_from_db(); self.assertEqual(self.solicitud.estado, "AT_PICKUP")
 
+    def test_recoleccion_con_solo_frascos_conserva_foto_y_temperatura(self):
+        Solicitud.objects.filter(pk=self.solicitud.pk).update(cantidad_tubos=0, cantidad_frascos=3)
+        respuesta = self.cliente.post(self.url, self._datos(temperatura_contenedor_c="4.50"), format="multipart")
+        self.assertEqual(respuesta.status_code, 201, respuesta.data)
+        self.solicitud.refresh_from_db()
+        self.assertEqual(self.solicitud.estado, "IN_TRANSIT")
+        self.assertTrue(EvidenciaSolicitud.objects.filter(solicitud=self.solicitud, temperatura_contenedor_c="4.50").exists())
+
     def test_temperatura_manual_con_hora_del_servidor_y_auditoria(self):
         ahora = timezone.now()
         with patch("apps.evidencias.servicios.timezone.now", return_value=ahora):

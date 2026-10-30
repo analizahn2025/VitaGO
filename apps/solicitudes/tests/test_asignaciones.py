@@ -170,7 +170,6 @@ class PruebasAsignacionesSolicitud(TestCase):
             "tipo_servicio_id": self.tipo_servicio.id,
             "origen_id": self.origen.id,
             "destino_id": self.destino.id,
-            "articulos": [{"tipo_articulo": "Documentos", "cantidad": 1}],
             "cantidad_tubos": 1,
         }
 

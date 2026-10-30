@@ -40,7 +40,9 @@ def listar_repartidores_autorizados(usuario, filtros=None):
     if filtros.get("estado_operativo"):
         consulta = consulta.filter(estado_operativo=filtros["estado_operativo"])
     if filtros.get("capacidad"):
-        lleno = Q(solicitudes_activas_calculadas__gte=F("limite_solicitudes_efectivo")) | Q(tubos_comprometidos__gte=F("limite_tubos_efectivo")) | Q(solicitudes_sin_cantidad_tubos__gt=0)
+        sin_espacio = Q(tubos_comprometidos__gte=F("limite_tubos_efectivo"), frascos_comprometidos__gte=F("limite_frascos_efectivo"))
+        excedido = Q(tubos_comprometidos__gt=F("limite_tubos_efectivo")) | Q(frascos_comprometidos__gt=F("limite_frascos_efectivo"))
+        lleno = Q(solicitudes_activas_calculadas__gte=F("limite_solicitudes_efectivo")) | sin_espacio | excedido | Q(solicitudes_sin_cantidad_tubos__gt=0) | Q(solicitudes_sin_cantidad_frascos__gt=0)
         if filtros["capacidad"] == CapacidadRepartidor.VACIO:
             consulta = consulta.filter(solicitudes_activas_calculadas=0)
         elif filtros["capacidad"] == CapacidadRepartidor.LLENO:
@@ -56,7 +58,8 @@ def listar_repartidores_autorizados(usuario, filtros=None):
 
 def listar_repartidores_disponibles(usuario, filtros=None):
     return filtrar_repartidores_disponibles(
-        listar_repartidores_autorizados(usuario, filtros), (filtros or {}).get("cantidad_tubos", 1)
+        listar_repartidores_autorizados(usuario, filtros),
+        (filtros or {}).get("cantidad_tubos", 0), (filtros or {}).get("cantidad_frascos", 0),
     )
 
 

@@ -2,7 +2,7 @@
 
 from django.db import transaction
 
-from apps.repartidores.capacidad import calcular_capacidad, obtener_carga_tubos
+from apps.repartidores.capacidad import calcular_capacidad, obtener_carga_recipientes
 from apps.repartidores.models import HistorialEstadoRepartidor
 from apps.repartidores.limites import obtener_limites_repartidor
 
@@ -40,7 +40,7 @@ def registrar_operacion_repartidor(repartidor, usuario, *, motivo, estado_nuevo=
     """Recalcula capacidad, conserva el estado si no se indica y devuelve la carga."""
     if not transaction.get_connection().in_atomic_block:
         raise RuntimeError("El cambio operativo requiere una transacción y el motorista bloqueado.")
-    carga = obtener_carga_tubos(repartidor)
+    carga = obtener_carga_recipientes(repartidor)
     cantidad = carga["solicitudes_activas"]
     # Sin carga siempre es EMPTY: no consultar otra vez la configuración.
     limites = obtener_limites_repartidor(repartidor) if cantidad else {}

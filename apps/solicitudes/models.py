@@ -43,6 +43,7 @@ class TipoServicio(ModeloUUID):
 
 class Solicitud(ModeloUUIDConMarcasDeTiempo):
     cantidad_tubos = models.PositiveIntegerField(null=True, blank=True)
+    cantidad_frascos = models.PositiveIntegerField(null=True, blank=True, default=0)
     numero = models.CharField(max_length=32, unique=True)
     empresa = models.ForeignKey(
         "organizaciones.Empresa",
@@ -149,8 +150,16 @@ class Solicitud(ModeloUUIDConMarcasDeTiempo):
         ]
         constraints = [
             models.CheckConstraint(
-                condition=models.Q(cantidad_tubos__isnull=True) | models.Q(cantidad_tubos__gte=1),
+                condition=models.Q(cantidad_tubos__isnull=True) | models.Q(cantidad_tubos__gte=0),
                 name="sol_cantidad_tubos_ck",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(cantidad_frascos__isnull=True) | models.Q(cantidad_frascos__gte=0),
+                name="sol_cantidad_frascos_ck",
+            ),
+            models.CheckConstraint(
+                condition=models.Q(cantidad_tubos__isnull=True) | models.Q(cantidad_frascos__isnull=True) | models.Q(cantidad_tubos__gt=0) | models.Q(cantidad_frascos__gt=0),
+                name="sol_recipientes_no_vacios_ck",
             ),
             models.CheckConstraint(
                 condition=models.Q(
@@ -341,6 +350,7 @@ class MovimientoEnvioEspecial(ModeloUUIDConMarcasDeTiempo):
 
 
 class ArticuloSolicitud(ModeloUUIDConMarcasDeTiempo):
+    """Registro histórico; las nuevas solicitudes solo declaran tubos y frascos."""
     solicitud = models.ForeignKey(
         Solicitud,
         on_delete=models.PROTECT,

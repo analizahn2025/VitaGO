@@ -9,7 +9,7 @@ class AdministracionEmpresa(admin.ModelAdmin):
     list_filter = ("estado", "pais")
     search_fields = ("nombre", "razon_social", "identificacion_fiscal")
     # Las modificaciones de límites pasan por el servicio transaccional y su auditoría.
-    readonly_fields = ("limite_tubos_por_motorista", "limite_solicitudes_por_motorista")
+    readonly_fields = ("limite_tubos_por_motorista", "limite_frascos_por_motorista", "limite_solicitudes_por_motorista")
 
 
 @admin.register(HistorialLimitesMotoristas)

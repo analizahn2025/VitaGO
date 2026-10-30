@@ -129,7 +129,7 @@ class VistaDetalleRepartidor(APIView):
 
     def patch(self, request, repartidor_id):
         obtener_repartidor_autorizado(request.user, repartidor_id)
-        campos = {campo for campo in request.data if campo in {"limite_tubos", "limite_solicitudes"}}
+        campos = {campo for campo in request.data if campo in {"limite_tubos", "limite_frascos", "limite_solicitudes"}}
         raise ValidationError({
             campo: "Los límites se configuran por empresa en Corporate y para toda la red en Network."
             for campo in campos or {"detail"}

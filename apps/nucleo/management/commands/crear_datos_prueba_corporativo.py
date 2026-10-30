@@ -248,13 +248,6 @@ class Command(BaseCommand):
                 "origen_id": sucursal.ubicacion_id,
                 "destino_id": destino.id,
                 "notas": marca,
-                "articulos": [
-                    {
-                        "tipo_articulo": "Artículo de prueba",
-                        "descripcion": "Contenido ficticio sin valor operativo.",
-                        "cantidad": Decimal("1"),
-                    }
-                ],
             },
         )
         return solicitud, True

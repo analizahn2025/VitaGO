@@ -11,8 +11,8 @@ from apps.organizaciones.models import HistorialLimitesMotoristas
 from apps.organizaciones.limites import configurar_limites_empresa
 from apps.repartidores.selectores import listar_repartidores_disponibles
 from apps.repartidores.serializadores import SerializadorRepartidor
-from apps.solicitudes.carga import actualizar_cantidad_tubos
-from apps.solicitudes.excepciones import CupoTubosInsuficiente, LimiteSolicitudesRepartidor
+from apps.solicitudes.carga import actualizar_carga_recipientes
+from apps.solicitudes.excepciones import CupoRecipientesInsuficiente, LimiteSolicitudesRepartidor
 from apps.solicitudes.models import Solicitud
 from apps.solicitudes.servicios import asignar_solicitud_manualmente, cambiar_estado_solicitud, crear_solicitud
 from apps.solicitudes.tests import test_asignaciones as datos
@@ -40,21 +40,23 @@ class PruebasCupoTubos(TestCase):
         r = Repartidor.objects.select_related("usuario", "empresa", "vehiculo").get(pk=(repartidor or self.repartidores[0]).pk)
         return SerializadorRepartidor(r).data
 
-    def test_dieciocho_mas_dos_llena_veinte_sin_llegar_a_cinco_solicitudes(self):
+    def test_veinte_tubos_agotan_solo_el_cupo_de_tubos(self):
         self._asignar(18)
         antes = self._perfil()
         self.assertEqual((antes["capacidad"], antes["tubos_disponibles"]), ("AVAILABLE_SPACE", 2))
         self._asignar(2)
         despues = self._perfil()
         self.assertEqual((despues["solicitudes_activas"], despues["tubos_comprometidos"]), (2, 20))
-        self.assertEqual(despues["capacidad"], "FULL")
-        self.assertFalse(despues["puede_recibir_solicitudes"])
+        self.assertEqual(despues["capacidad"], "AVAILABLE_SPACE")
+        self.assertTrue(despues["puede_recibir_solicitudes"])
+        self.assertEqual(despues["tubos_disponibles"], 0)
+        self.assertEqual(despues["frascos_disponibles"], 20)
         self.assertEqual(despues["tubos_reservados"], 20)
         self.assertEqual(despues["tubos_en_transporte"], 0)
 
     def test_dieciocho_mas_tres_rechaza_409_y_preserva_carga(self):
         self._asignar(18)
-        with self.assertRaises(CupoTubosInsuficiente) as error:
+        with self.assertRaises(CupoRecipientesInsuficiente) as error:
             self._asignar(3)
         self.assertEqual(error.exception.status_code, 409)
         self.assertIn("repartidor_id", error.exception.detail)
@@ -130,16 +132,16 @@ class PruebasCupoTubos(TestCase):
         solicitud = self._nueva(None, self.repartidores[0], "PICKED_UP")
         self.assertFalse(self._perfil()["puede_recibir_solicitudes"])
         self.assertEqual(self._perfil()["solicitudes_sin_cantidad_tubos"], 1)
-        actualizar_cantidad_tubos(self.administrador, solicitud.pk, {"cantidad_tubos": 18, "motivo": "Conteo confirmado"})
+        actualizar_carga_recipientes(self.administrador, solicitud.pk, {"cantidad_tubos": 18, "motivo": "Conteo confirmado"})
         self.assertEqual(self._perfil()["tubos_disponibles"], 2)
 
     def test_correccion_conocida_no_aumenta_cupo_ni_modifica_recogidos(self):
         solicitud = self._asignar(18)
         with self.assertRaises(ValidationError):
-            actualizar_cantidad_tubos(self.administrador, solicitud.pk, {"cantidad_tubos": 21, "motivo": "Prueba"})
+            actualizar_carga_recipientes(self.administrador, solicitud.pk, {"cantidad_tubos": 21, "motivo": "Prueba"})
         Solicitud.objects.filter(pk=solicitud.pk).update(estado="PICKED_UP")
         with self.assertRaises(ValidationError):
-            actualizar_cantidad_tubos(self.administrador, solicitud.pk, {"cantidad_tubos": 1, "motivo": "Prueba"})
+            actualizar_carga_recipientes(self.administrador, solicitud.pk, {"cantidad_tubos": 1, "motivo": "Prueba"})
 
     def test_api_rechaza_cantidad_invalida_y_devuelve_campos_de_carga(self):
         cliente = APIClient(); cliente.force_authenticate(self.administrador)
@@ -169,5 +171,5 @@ class PruebasCupoTubos(TestCase):
         otro_cliente = Empresa.objects.create(nombre="Otro cliente", pais=self.empresa.pais)
         solicitud = self._nueva(3)
         Solicitud.objects.filter(pk=solicitud.pk).update(empresa=otro_cliente)
-        with self.assertRaises(CupoTubosInsuficiente):
+        with self.assertRaises(CupoRecipientesInsuficiente):
             asignar_solicitud_manualmente(self.administrador, solicitud.pk, {"repartidor_id": r.pk})

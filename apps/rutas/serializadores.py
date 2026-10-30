@@ -15,7 +15,8 @@ class SerializadorParadaRuta(serializers.Serializer):
     orden = serializers.IntegerField(min_value=1)
     solicitud_id = serializers.UUIDField()
     numero_solicitud = serializers.CharField()
-    cantidad_tubos = serializers.IntegerField(allow_null=True, min_value=1)
+    cantidad_tubos = serializers.IntegerField(allow_null=True, min_value=0)
+    cantidad_frascos = serializers.IntegerField(allow_null=True, min_value=0, default=0)
     prioridad = serializers.ChoiceField(choices=PrioridadSolicitud.choices)
     modalidad = serializers.ChoiceField(
         choices=ModalidadSolicitud.choices, allow_null=True

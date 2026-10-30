@@ -30,6 +30,8 @@ def _validar_carga_comprometida(motoristas, anteriores, nuevos):
         estado__in=ESTADOS_SOLICITUD_ACTIVOS,
     ).values("repartidor_asignado_id").annotate(
         tubos=Coalesce(Sum("cantidad_tubos"), 0), solicitudes=Count("pk"),
+        frascos=Coalesce(Sum("cantidad_frascos"), 0),
+        frascos_desconocidos=Count("pk", filter=Q(cantidad_frascos__isnull=True)),
         desconocidas=Count("pk", filter=Q(cantidad_tubos__isnull=True)),
     )
     errores = {}
@@ -37,6 +39,10 @@ def _validar_carga_comprometida(motoristas, anteriores, nuevos):
         errores["limite_tubos"] = "Hay motoristas con más tubos comprometidos que el límite propuesto."
     elif nuevos["limite_tubos"] < anteriores["limite_tubos"] and cargas.filter(desconocidas__gt=0).exists():
         errores["limite_tubos"] = "Complete las cantidades de tubos pendientes antes de reducir el límite."
+    if cargas.filter(frascos__gt=nuevos["limite_frascos"]).exists():
+        errores["limite_frascos"] = "Hay motoristas con más frascos comprometidos que el límite propuesto."
+    elif nuevos["limite_frascos"] < anteriores["limite_frascos"] and cargas.filter(frascos_desconocidos__gt=0).exists():
+        errores["limite_frascos"] = "Complete las cantidades de frascos pendientes antes de reducir el límite."
     if cargas.filter(solicitudes__gt=nuevos["limite_solicitudes"]).exists():
         errores["limite_solicitudes"] = "Hay motoristas con más solicitudes activas que el límite propuesto."
     if errores:

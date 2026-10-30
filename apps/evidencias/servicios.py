@@ -163,8 +163,8 @@ def registrar_evidencia(usuario, solicitud_id, datos_validados):
                 from apps.evidencias.temperaturas import validar_temperatura
                 datos["temperatura_contenedor_c"] = validar_temperatura(datos.get("temperatura_contenedor_c"))
                 datos["fuente_temperatura"] = "MANUAL"
-                from apps.solicitudes.servicios import validar_cantidad_tubos
-                validar_cantidad_tubos(solicitud.cantidad_tubos)
+                from apps.solicitudes.recipientes import validar_cantidades_recipientes
+                validar_cantidades_recipientes(solicitud.cantidad_tubos, solicitud.cantidad_frascos)
             elif "temperatura_contenedor_c" in datos:
                 raise ValidationError({"temperatura_contenedor_c": "Solo corresponde a la recolección."})
             if solicitud.estado not in ESTADOS_POR_TIPO_EVIDENCIA[tipo]:

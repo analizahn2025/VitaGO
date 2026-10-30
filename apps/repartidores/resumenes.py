@@ -14,7 +14,7 @@ from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.evidencias.models import EvidenciaSolicitud
 from apps.jornadas.models import JornadaRepartidor
-from apps.repartidores.capacidad import calcular_capacidad, obtener_carga_tubos, puede_recibir_solicitudes
+from apps.repartidores.capacidad import calcular_capacidad, obtener_carga_recipientes, puede_recibir_solicitudes
 from apps.repartidores.limites import obtener_limites_repartidor
 from apps.repartidores.models import Repartidor
 from apps.repartidores.selectores import listar_repartidores_autorizados
@@ -100,6 +100,8 @@ def _actividad_por_fecha(identificadores, campo, inicio, fin, *, estados=None):
     )).filter(responsable__in=identificadores).order_by()
     return {fila["responsable"]: fila for fila in consulta.values("responsable").annotate(
         cantidad=Count("id"), tubos=Sum("cantidad_tubos"),
+        frascos=Sum("cantidad_frascos"),
+        sin_cantidad_frascos=Count("id", filter=Q(cantidad_frascos__isnull=True)),
         sin_cantidad=Count("id", filter=Q(cantidad_tubos__isnull=True)),
     )}
 
@@ -142,7 +144,7 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
     for r in motoristas:
         recogida, entrega = recogidas.get(r.pk, {}), entregadas.get(r.pk, {})
         km, temp = jornadas.get(r.pk, {}), temperaturas.get(r.pk, {})
-        carga = obtener_carga_tubos(r)
+        carga = obtener_carga_recipientes(r)
         limites = obtener_limites_repartidor(r)
         incompletas = carga["solicitudes_sin_cantidad_tubos"]
         resultados[r.pk] = {
@@ -151,6 +153,8 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
                             "canceladas": canceladas.get(r.pk, {}).get("cantidad", 0)},
             "tubos": {"recogidos_conocidos": recogida.get("tubos") or 0, "entregados_conocidos": entrega.get("tubos") or 0,
                       "recolecciones_sin_cantidad": recogida.get("sin_cantidad", 0), "entregas_sin_cantidad": entrega.get("sin_cantidad", 0)},
+            "frascos": {"recogidos_conocidos": recogida.get("frascos") or 0, "entregados_conocidos": entrega.get("frascos") or 0,
+                        "recolecciones_sin_cantidad": recogida.get("sin_cantidad_frascos", 0), "entregas_sin_cantidad": entrega.get("sin_cantidad_frascos", 0)},
             "kilometraje": {"criterio": "CIERRE_JORNADA", "jornadas_cerradas": km.get("cerradas", 0),
                 "jornadas_con_medicion": km.get("con_medicion", 0), "jornadas_consolidadas": km.get("consolidadas", 0),
                 "jornadas_sin_cierre_en_periodo": activas.get(r.pk, 0),
@@ -165,6 +169,8 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
             "carga_actual": {**carga, **limites,
                 "tubos_reservados": carga["tubos_comprometidos"] - carga["tubos_en_transporte"],
                 "tubos_disponibles": 0 if incompletas else max(0, limites["limite_tubos"] - carga["tubos_comprometidos"]),
+                "frascos_reservados": carga["frascos_comprometidos"] - carga["frascos_en_transporte"],
+                "frascos_disponibles": 0 if carga["solicitudes_sin_cantidad_frascos"] else max(0, limites["limite_frascos"] - carga["frascos_comprometidos"]),
                 "capacidad": calcular_capacidad(carga["solicitudes_activas"], **limites, **carga),
                 "estado_operativo": r.estado_operativo, "puede_recibir_solicitudes": puede_recibir_solicitudes(r, carga["solicitudes_activas"], carga=carga)},
         }

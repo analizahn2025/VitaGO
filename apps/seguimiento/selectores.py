@@ -6,6 +6,7 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied
 
 from apps.jornadas.opciones import EstadoJornada
+from apps.jornadas.models import JornadaRepartidor
 from apps.seguimiento.models import RegistroUbicacion
 from apps.seguimiento.vigencia import posiciones_vigentes
 from apps.repartidores.models import Repartidor
@@ -63,8 +64,22 @@ def obtener_configuracion_gps(usuario):
         raise Http404("El usuario no posee un perfil activo de motorista.") from error
     if not usuario_tiene_permiso(usuario, "repartidor.registrar_ubicacion", empresa=repartidor.empresa):
         raise PermissionDenied('No tiene el permiso requerido: "repartidor.registrar_ubicacion".')
+    ahora = timezone.now()
+    jornada = JornadaRepartidor.objects.filter(
+        repartidor=repartidor, estado=EstadoJornada.ACTIVA,
+        iniciada_en__lte=ahora, cierre_programado_en__gt=ahora,
+    ).first()
     return {
-        "hora_servidor": timezone.now().isoformat(),
+        "hora_servidor": ahora.isoformat(),
+        "seguimiento_jornada": {
+            "captura_habilitada": jornada is not None,
+            "jornada_id": str(jornada.pk) if jornada else None,
+            "cierre_programado_en": jornada.cierre_programado_en.isoformat() if jornada else None,
+            "requiere_servicio_activo": False,
+            "incluye_tiempo_sin_servicios": True,
+            "incluye_almuerzo": True,
+            "detener_al_finalizar_jornada": True,
+        },
         "zona_horaria_operativa": (
             repartidor.empresa.pais.zona_horaria_predeterminada
             if repartidor.empresa_id else settings.TIME_ZONE

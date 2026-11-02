@@ -1,5 +1,4 @@
-from django.core.files.storage import default_storage
-from django.http import FileResponse, Http404
+from apps.evidencias.imagenes import responder_archivo_imagen
 from rest_framework.parsers import FormParser, MultiPartParser
 from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
@@ -121,15 +120,5 @@ class VistaArchivoEvidenciaIncidencia(APIView):
             incidencia_id,
             evidencia_id,
         )
-        if not default_storage.exists(evidencia.clave_almacenamiento):
-            raise Http404("El archivo de la evidencia no está disponible.")
-        archivo = default_storage.open(evidencia.clave_almacenamiento, "rb")
-        respuesta = FileResponse(
-            archivo,
-            content_type=evidencia.tipo_contenido,
-        )
-        respuesta["Content-Length"] = evidencia.tamano_bytes
-        respuesta["Cache-Control"] = "private, no-store"
-        respuesta["X-Content-Type-Options"] = "nosniff"
-        return respuesta
+        return responder_archivo_imagen(evidencia)
 

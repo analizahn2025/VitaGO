@@ -2,14 +2,14 @@
 
 import uuid
 
-from django.core.files.storage import default_storage
 from django.db import transaction
 from django.db.models import Q
 from django.http import Http404
 from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
-from apps.evidencias.servicios import limpiar_archivo_nuevo, validar_archivo_imagen
+from apps.evidencias.imagenes import preparar_imagen_base64
+from apps.evidencias.servicios import validar_archivo_imagen
 from apps.incidencias.models import (
     EventoIncidencia,
     EvidenciaIncidencia,
@@ -221,47 +221,40 @@ def registrar_evidencia_incidencia(usuario, incidencia_id, datos_validados):
     datos = dict(datos_validados)
     archivo = datos.pop("archivo")
     tipo_contenido, extension = validar_archivo_imagen(archivo)
-    clave_guardada = None
+    with transaction.atomic():
+        autorizada = obtener_incidencia_autorizada(usuario, incidencia_id)
+        incidencia = (
+            Incidencia.objects.select_for_update(of=("self",))
+            .select_related(
+                "jornada",
+                "repartidor",
+                "repartidor__empresa",
+            )
+            .get(id=autorizada.id)
+        )
+        _validar_propiedad_evidencia(usuario, incidencia)
+        datos["capturada_en"] = timezone.now()
 
-    try:
-        with transaction.atomic():
-            autorizada = obtener_incidencia_autorizada(usuario, incidencia_id)
-            incidencia = (
-                Incidencia.objects.select_for_update(of=("self",))
-                .select_related(
-                    "jornada",
-                    "repartidor",
-                    "repartidor__empresa",
-                )
-                .get(id=autorizada.id)
-            )
-            _validar_propiedad_evidencia(usuario, incidencia)
-            datos["capturada_en"] = timezone.now()
-
-            clave_propuesta = (
-                f"incidencias/{incidencia.id}/{uuid.uuid4().hex}.{extension}"
-            )
-            archivo.seek(0)
-            clave_guardada = default_storage.save(clave_propuesta, archivo)
-            evidencia = EvidenciaIncidencia.objects.create(
-                incidencia=incidencia,
-                repartidor=incidencia.repartidor,
-                clave_almacenamiento=clave_guardada,
-                tipo_contenido=tipo_contenido,
-                tamano_bytes=archivo.size,
-                **datos,
-            )
-            EventoIncidencia.objects.create(
-                incidencia=incidencia,
-                tipo=TipoEventoIncidencia.EVIDENCIA_REGISTRADA,
-                realizado_por=usuario,
-                metadatos={
-                    "evidencia_id": str(evidencia.id),
-                    "capturada_en": evidencia.capturada_en.isoformat(),
-                },
-            )
-            return evidencia
-    except Exception:
-        limpiar_archivo_nuevo(clave_guardada)
-        raise
+        clave_propuesta = (
+            f"bd/incidencias/{incidencia.id}/{uuid.uuid4().hex}.{extension}"
+        )
+        evidencia = EvidenciaIncidencia.objects.create(
+            incidencia=incidencia,
+            repartidor=incidencia.repartidor,
+            clave_almacenamiento=clave_propuesta,
+            **preparar_imagen_base64(archivo, datos["capturada_en"]),
+            tipo_contenido=tipo_contenido,
+            tamano_bytes=archivo.size,
+            **datos,
+        )
+        EventoIncidencia.objects.create(
+            incidencia=incidencia,
+            tipo=TipoEventoIncidencia.EVIDENCIA_REGISTRADA,
+            realizado_por=usuario,
+            metadatos={
+                "evidencia_id": str(evidencia.id),
+                "capturada_en": evidencia.capturada_en.isoformat(),
+            },
+        )
+        return evidencia
 

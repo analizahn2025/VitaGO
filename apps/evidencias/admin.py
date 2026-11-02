@@ -20,6 +20,8 @@ class AdministracionEvidenciaSolicitud(admin.ModelAdmin):
         "tipo",
         "clave_almacenamiento",
         "url_archivo",
+        "imagen_guardada_en", "imagen_expira_en", "imagen_eliminada_en",
+        "archivo_original_eliminado_en",
         "tipo_contenido",
         "tamano_bytes",
         "latitud",

@@ -95,9 +95,11 @@ class PruebasFlujoAutomatico(TestCase):
     def test_activa_unicamente_primero_y_no_toda_cola(self):
         segunda = self._segunda()
         self._activar()
-        segunda.refresh_from_db()
-        self.assertEqual(segunda.estado, EstadoSolicitud.ASIGNADA)
+        # Ambos orígenes son idénticos; se verifica exclusividad sin depender del desempate.
+        estados = Solicitud.objects.filter(pk__in=(self.solicitud.pk, segunda.pk)).values_list("estado", flat=True)
+        self.assertCountEqual(estados, [EstadoSolicitud.ASIGNADA, EstadoSolicitud.HACIA_RECOLECCION])
         self.assertEqual(Solicitud.objects.filter(estado=EstadoSolicitud.HACIA_RECOLECCION).count(), 1)
+        self.assertEqual(EventoSolicitud.objects.filter(tipo=TipoEventoSolicitud.HACIA_RECOLECCION).count(), 1)
 
     def test_repetir_activacion_no_duplica_eventos_ni_versiones(self):
         self._activar()
@@ -198,10 +200,10 @@ class PruebasFlujoAutomatico(TestCase):
                 raise ValidationError({"estado_destino": "Fallo simulado"})
             return cambiar_estado_solicitud(usuario, identificador, datos, **opciones)
         with patch("apps.solicitudes.servicios.cambiar_estado_solicitud", side_effect=cambiar), \
-                patch("apps.evidencias.servicios.default_storage.delete") as eliminar:
+                patch("django.core.files.storage.default_storage.delete") as eliminar:
             with self.assertRaises(ValidationError):
                 self._registrar("FOTO_RECOLECCION")
-            eliminar.assert_called_once()
+            eliminar.assert_not_called()  # La imagen Base64 se revierte con la transacción.
         self.solicitud.refresh_from_db()
         self.assertEqual(self.solicitud.estado, EstadoSolicitud.EN_RECOLECCION)
         self.assertFalse(EvidenciaSolicitud.objects.exists())

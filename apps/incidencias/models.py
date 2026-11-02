@@ -1,5 +1,6 @@
 from django.db import models
 
+from apps.evidencias.imagenes import ModeloConImagenEnBaseDatos
 from apps.incidencias.opciones import EstadoIncidencia, TipoEventoIncidencia
 from apps.nucleo.models import ModeloUUIDConMarcasDeTiempo
 
@@ -162,7 +163,7 @@ class EventoIncidencia(ModeloUUIDConMarcasDeTiempo):
         verbose_name_plural = "eventos de incidencias"
 
 
-class EvidenciaIncidencia(ModeloUUIDConMarcasDeTiempo):
+class EvidenciaIncidencia(ModeloConImagenEnBaseDatos, ModeloUUIDConMarcasDeTiempo):
     incidencia = models.ForeignKey(
         Incidencia,
         on_delete=models.PROTECT,
@@ -185,6 +186,7 @@ class EvidenciaIncidencia(ModeloUUIDConMarcasDeTiempo):
         db_table = "evidencias_incidencia"
         ordering = ("capturada_en", "id")
         indexes = [
+            models.Index(fields=("capturada_en",), name="evid_inc_retencion_idx"),
             models.Index(
                 fields=("incidencia", "-capturada_en"),
                 name="evid_inc_incid_fecha_idx",
@@ -195,6 +197,8 @@ class EvidenciaIncidencia(ModeloUUIDConMarcasDeTiempo):
             ),
         ]
         constraints = [
+            models.CheckConstraint(condition=models.Q(contenido_base64__isnull=True) | models.Q(imagen_guardada_en__isnull=False), name="evid_inc_base64_fecha_ck"),
+            models.CheckConstraint(condition=models.Q(imagen_eliminada_en__isnull=True) | models.Q(contenido_base64__isnull=True), name="evid_inc_borrada_sin_datos_ck"),
             models.CheckConstraint(
                 condition=models.Q(latitud__gte=-90, latitud__lte=90),
                 name="evid_inc_latitud_valida_ck",

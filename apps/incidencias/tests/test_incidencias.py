@@ -1,6 +1,5 @@
 import tempfile
 import uuid
-from contextlib import nullcontext
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -172,6 +171,16 @@ class PruebasIncidencias(TestCase):
         datos.update(cambios)
         return datos
 
+    def test_imagen_incidencia_se_guarda_en_bd_sin_disco(self):
+        from base64 import b64decode
+        incidencia = crear_incidencia(self.repartidor.usuario, self._datos())
+        with patch("django.core.files.storage.default_storage.save", side_effect=AssertionError("No escribir archivos")):
+            evidencia = registrar_evidencia_incidencia(self.repartidor.usuario, incidencia.pk, {
+                "archivo": crear_imagen_prueba(), "latitud": self.origen.latitud, "longitud": self.origen.longitud,
+            })
+        guardada = EvidenciaIncidencia.objects.get(pk=evidencia.pk)
+        self.assertEqual(b64decode(guardada.contenido_base64, validate=True), crear_imagen_prueba().read())
+
     def _crear_solicitud_asignada(self):
         solicitud = Solicitud.objects.create(
             cantidad_tubos=1,
@@ -291,24 +300,18 @@ class PruebasIncidencias(TestCase):
         self.assertEqual(respuesta.status_code, 400)
         self.assertEqual(EvidenciaIncidencia.objects.count(), 4)
 
-    def test_compensacion_incidencia_preserva_error_original_y_su_historial(self):
+    def test_fallo_auditoria_revierte_imagen_base64_y_conserva_historial(self):
         incidencia = crear_incidencia(self.repartidor.usuario, self._datos())
-        for fallo_limpieza in (None, OSError("Almacenamiento no disponible")):
-            original = RuntimeError("Fallo de auditoría")
-            with self.subTest(limpieza_falla=bool(fallo_limpieza)), \
-                 patch("apps.incidencias.servicios.default_storage.save", return_value="incidencias/nueva.png"), \
-                 patch("apps.evidencias.servicios.default_storage.delete", side_effect=fallo_limpieza) as eliminar, \
-                 patch("apps.incidencias.servicios.EventoIncidencia.objects.create", side_effect=original), \
-                 (self.assertLogs("vitago.api", level="ERROR") if fallo_limpieza else nullcontext()):
-                with self.assertRaises(RuntimeError) as error:
-                    registrar_evidencia_incidencia(self.repartidor.usuario, incidencia.pk, {
-                        "archivo": crear_imagen_prueba(), "latitud": self.origen.latitud,
-                        "longitud": self.origen.longitud,
-                    })
-                self.assertIs(error.exception, original)
-                eliminar.assert_called_once_with("incidencias/nueva.png")
-            self.assertFalse(EvidenciaIncidencia.objects.exists())
-            self.assertEqual(incidencia.eventos.count(), 1)
+        original = RuntimeError("Fallo de auditoría")
+        with patch("apps.incidencias.servicios.EventoIncidencia.objects.create", side_effect=original):
+            with self.assertRaises(RuntimeError) as error:
+                registrar_evidencia_incidencia(self.repartidor.usuario, incidencia.pk, {
+                    "archivo": crear_imagen_prueba(), "latitud": self.origen.latitud,
+                    "longitud": self.origen.longitud,
+                })
+            self.assertIs(error.exception, original)
+        self.assertFalse(EvidenciaIncidencia.objects.exists())
+        self.assertEqual(incidencia.eventos.count(), 1)
 
     def test_acepta_solicitud_asignada_en_el_momento_reportado(self):
         solicitud = self._crear_solicitud_asignada()

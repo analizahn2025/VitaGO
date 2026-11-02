@@ -104,6 +104,7 @@ class SerializadorRevisionIncidencia(serializers.Serializer):
 
 class SerializadorEvidenciaIncidencia(serializers.ModelSerializer):
     archivo_disponible = serializers.SerializerMethodField()
+    imagen_expira_en = serializers.DateTimeField(read_only=True)
 
     class Meta:
         model = EvidenciaIncidencia
@@ -118,11 +119,12 @@ class SerializadorEvidenciaIncidencia(serializers.ModelSerializer):
             "capturada_en",
             "notas",
             "archivo_disponible",
+            "imagen_expira_en", "imagen_eliminada_en",
             "creado_en",
         )
 
     def get_archivo_disponible(self, objeto):
-        return bool(objeto.clave_almacenamiento)
+        return objeto.archivo_disponible
 
 
 class SerializadorRegistroEvidenciaIncidencia(serializers.Serializer):

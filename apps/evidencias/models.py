@@ -1,10 +1,11 @@
 from django.db import models
 
 from apps.evidencias.opciones import TipoEvidenciaSolicitud
+from apps.evidencias.imagenes import ModeloConImagenEnBaseDatos
 from apps.nucleo.models import ModeloUUIDConMarcasDeTiempo
 
 
-class EvidenciaSolicitud(ModeloUUIDConMarcasDeTiempo):
+class EvidenciaSolicitud(ModeloConImagenEnBaseDatos, ModeloUUIDConMarcasDeTiempo):
     temperatura_contenedor_c = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
     fuente_temperatura = models.CharField(max_length=16, null=True, blank=True)
     solicitud = models.ForeignKey(
@@ -34,6 +35,7 @@ class EvidenciaSolicitud(ModeloUUIDConMarcasDeTiempo):
         db_table = "evidencias_solicitud"
         ordering = ("capturada_en", "id")
         indexes = [
+            models.Index(fields=("capturada_en",), name="evid_sol_retencion_idx"),
             models.Index(
                 fields=("solicitud", "tipo", "-capturada_en"),
                 name="evid_sol_tipo_fecha_idx",
@@ -44,6 +46,8 @@ class EvidenciaSolicitud(ModeloUUIDConMarcasDeTiempo):
             ),
         ]
         constraints = [
+            models.CheckConstraint(condition=models.Q(contenido_base64__isnull=True) | models.Q(imagen_guardada_en__isnull=False), name="evid_sol_base64_fecha_ck"),
+            models.CheckConstraint(condition=models.Q(imagen_eliminada_en__isnull=True) | models.Q(contenido_base64__isnull=True), name="evid_sol_borrada_sin_datos_ck"),
             models.CheckConstraint(
                 condition=(
                     models.Q(temperatura_contenedor_c__isnull=True, fuente_temperatura__isnull=True)

@@ -126,6 +126,7 @@ MIDDLEWARE = [
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "apps.nucleo.middleware.MiddlewareRecuperacionCierre",
+    "apps.nucleo.middleware.MiddlewareRetencionImagenes",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
@@ -295,6 +296,7 @@ MEDIA_ROOT = (
     else BASE_DIR / raiz_archivos_configurada
 )
 MEDIA_URL = "/media/"
+HABILITAR_MANTENIMIENTO_IMAGENES = env.bool("HABILITAR_MANTENIMIENTO_IMAGENES", default=True)
 TAMANO_MAXIMO_EVIDENCIA_MB = env.int(
     "TAMANO_MAXIMO_EVIDENCIA_MB",
     default=10,

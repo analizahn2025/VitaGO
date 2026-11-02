@@ -36,6 +36,6 @@ class AdministracionEventoIncidencia(admin.ModelAdmin):
 class AdministracionEvidenciaIncidencia(admin.ModelAdmin):
     list_display = ("incidencia", "repartidor", "capturada_en")
     readonly_fields = tuple(
-        campo.name for campo in EvidenciaIncidencia._meta.fields
+        campo.name for campo in EvidenciaIncidencia._meta.fields if campo.name != "contenido_base64"
     )
 

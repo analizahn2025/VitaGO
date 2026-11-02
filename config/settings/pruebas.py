@@ -12,3 +12,4 @@ PROVEEDOR_AUTENTICACION = "LOCAL"
 ALLOWED_HOSTS = ["testserver", "localhost"]
 # Las pruebas de recuperación lo habilitan explícitamente con sus propios datos.
 HABILITAR_RECUPERACION_CIERRE = False
+HABILITAR_MANTENIMIENTO_IMAGENES = False

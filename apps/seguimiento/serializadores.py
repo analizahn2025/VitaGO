@@ -3,6 +3,48 @@ from decimal import Decimal
 from rest_framework import serializers
 
 from apps.seguimiento.models import RegistroUbicacion, RevisionKilometraje
+from apps.repartidores.opciones import EstadoOperativoRepartidor
+
+
+class SerializadorConsultaMotoristasSeguimiento(serializers.Serializer):
+    empresa_id = serializers.UUIDField(required=False)
+    repartidor_id = serializers.UUIDField(required=False)
+    estado_operativo = serializers.ChoiceField(choices=EstadoOperativoRepartidor.choices, required=False)
+    en_almuerzo = serializers.BooleanField(required=False)
+    con_servicios = serializers.BooleanField(required=False)
+
+    def validate(self, atributos):
+        desconocidos = set(self.initial_data) - set(self.fields) - {"pagina", "tamano_pagina"}
+        if desconocidos:
+            raise serializers.ValidationError({campo: "Filtro no permitido." for campo in sorted(desconocidos)})
+        return atributos
+
+
+class SerializadorUbicacionMotorista(serializers.ModelSerializer):
+    recibida_en = serializers.DateTimeField(source="creado_en")
+
+    class Meta:
+        model = RegistroUbicacion
+        fields = ("latitud", "longitud", "precision_metros", "velocidad_metros_segundo", "rumbo_grados", "registrada_en", "recibida_en", "es_operativo")
+
+
+class SerializadorMotoristaSeguimiento(serializers.Serializer):
+    repartidor_id = serializers.UUIDField()
+    usuario_id = serializers.UUIDField()
+    nombre = serializers.CharField()
+    empresa_id = serializers.UUIDField(allow_null=True)
+    jornada_id = serializers.UUIDField()
+    fecha_operativa = serializers.DateField(allow_null=True)
+    iniciada_en = serializers.DateTimeField()
+    cierre_programado_en = serializers.DateTimeField()
+    estado_operativo = serializers.ChoiceField(choices=EstadoOperativoRepartidor.choices)
+    en_almuerzo = serializers.BooleanField()
+    solicitudes_activas = serializers.IntegerField()
+    tiene_servicios_activos = serializers.BooleanField()
+    ubicacion = SerializadorUbicacionMotorista(allow_null=True)
+    estado_ubicacion = serializers.ChoiceField(choices=("ACTUALIZADA", "DESACTUALIZADA", "SIN_PRECISION", "BAJA_PRECISION", "SIN_UBICACION"))
+    ubicacion_vigente = serializers.BooleanField()
+    antiguedad_segundos = serializers.FloatField(allow_null=True)
 
 
 class SerializadorLlegadaDetectada(serializers.Serializer):

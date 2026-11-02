@@ -1,5 +1,4 @@
 import tempfile
-from contextlib import nullcontext
 from datetime import timedelta
 from decimal import Decimal
 from unittest.mock import patch
@@ -159,6 +158,16 @@ class PruebasOperacionConEvidencias(TestCase):
     def _archivo_png(self, nombre="evidencia.png"):
         return crear_imagen_prueba(nombre=nombre)
 
+    def test_guardado_base64_no_depende_del_disco(self):
+        from base64 import b64decode
+        self.solicitud.estado = EstadoSolicitud.EN_RECOLECCION
+        self.solicitud.save()
+        with patch("django.core.files.storage.default_storage.save", side_effect=AssertionError("No escribir archivos")):
+            evidencia = self._registrar(TipoEvidenciaSolicitud.FOTO_RECOLECCION)
+        guardada = EvidenciaSolicitud.objects.get(pk=evidencia.pk)
+        self.assertEqual(b64decode(guardada.contenido_base64, validate=True), self._archivo_png().read())
+        self.assertTrue(guardada.archivo_disponible)
+
     def _registrar(self, tipo):
         return registrar_evidencia(
             self.usuario_repartidor,
@@ -300,24 +309,16 @@ class PruebasOperacionConEvidencias(TestCase):
             })
         self.assertEqual(evidencia.capturada_en, ahora)
 
-    def test_compensacion_preserva_error_original_y_revierte_filas(self):
+    def test_fallo_auditoria_revierte_imagen_base64_y_filas(self):
         self.solicitud.estado = EstadoSolicitud.EN_RECOLECCION
         self.solicitud.save()
-        for fallo_limpieza in (None, OSError("Almacenamiento no disponible")):
-            original = RuntimeError("Fallo de auditoría")
-            with self.subTest(limpieza_falla=bool(fallo_limpieza)), \
-                 patch("apps.evidencias.servicios.default_storage.save", return_value="evidencias/nueva.png"), \
-                 patch("apps.evidencias.servicios.default_storage.delete", side_effect=fallo_limpieza) as eliminar, \
-                 patch("apps.evidencias.servicios.EventoSolicitud.objects.create", side_effect=original), \
-                 (self.assertLogs("vitago.api", level="ERROR") if fallo_limpieza else nullcontext()):
-                with self.assertRaises(RuntimeError) as error:
-                    self._registrar(TipoEvidenciaSolicitud.FOTO_RECOLECCION)
-                self.assertIs(error.exception, original)
-                eliminar.assert_called_once_with("evidencias/nueva.png")
-            self.assertFalse(EvidenciaSolicitud.objects.exists())
-            self.assertFalse(EventoSolicitud.objects.exists())
-
+        original = RuntimeError("Fallo de auditoría")
+        with patch("apps.evidencias.servicios.EventoSolicitud.objects.create", side_effect=original):
+            with self.assertRaises(RuntimeError) as error:
+                self._registrar(TipoEvidenciaSolicitud.FOTO_RECOLECCION)
+            self.assertIs(error.exception, original)
         self.assertFalse(EvidenciaSolicitud.objects.exists())
+        self.assertFalse(EventoSolicitud.objects.exists())
 
     def test_solo_motorista_asignado_puede_registrar_evidencia(self):
         self.solicitud.estado = EstadoSolicitud.EN_RECOLECCION
@@ -492,16 +493,10 @@ class PruebasOperacionConEvidencias(TestCase):
                 tipo=TipoEventoSolicitud.ENTREGADA,
             ).exists()
         )
-        self.assertTrue(
-            archivo_existe_en_almacenamiento(
-                evidencia_recoleccion.clave_almacenamiento
-            )
-        )
-        self.assertTrue(
-            archivo_existe_en_almacenamiento(
-                evidencia_entrega.clave_almacenamiento
-            )
-        )
+        for evidencia in (evidencia_recoleccion, evidencia_entrega):
+            from base64 import b64decode
+            guardada = EvidenciaSolicitud.objects.get(pk=evidencia.pk)
+            self.assertTrue(b64decode(guardada.contenido_base64).startswith(b"\x89PNG\r\n\x1a\n"))
         self.assertEqual(asignacion.finalizada_en, self.solicitud.entregada_en)
         jornada = finalizar_jornada(self.usuario_repartidor, self.jornada.pk, {})
         self.assertEqual(
@@ -509,9 +504,3 @@ class PruebasOperacionConEvidencias(TestCase):
              jornada.recolecciones_completadas, jornada.servicios_normales),
             (1, 1, 1, 1),
         )
-
-
-def archivo_existe_en_almacenamiento(clave):
-    from django.core.files.storage import default_storage
-
-    return default_storage.exists(clave)

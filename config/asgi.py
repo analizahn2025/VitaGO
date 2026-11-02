@@ -12,3 +12,11 @@ from apps.jornadas.recuperacion import recuperar_al_arrancar  # noqa: E402
 
 recuperar_al_arrancar()
 
+from apps.evidencias.mantenimiento import recuperar_imagenes_al_arrancar  # noqa: E402
+
+recuperar_imagenes_al_arrancar()
+
+from apps.evidencias.planificador import iniciar_planificador_servidor  # noqa: E402
+
+iniciar_planificador_servidor()
+

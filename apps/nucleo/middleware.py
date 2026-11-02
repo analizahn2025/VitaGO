@@ -31,6 +31,17 @@ class MiddlewareRecuperacionCierre:
         return self.obtener_respuesta(solicitud)
 
 
+class MiddlewareRetencionImagenes:
+    def __init__(self, obtener_respuesta):
+        self.obtener_respuesta = obtener_respuesta
+
+    def __call__(self, solicitud):
+        if solicitud.path.startswith(("/api/", "/admin/")):
+            from apps.evidencias.mantenimiento import recuperar_imagenes
+            recuperar_imagenes()
+        return self.obtener_respuesta(solicitud)
+
+
 class MiddlewareRendimientoAPI:
     """Mide el tiempo interno sin registrar datos sensibles."""
 

@@ -1,0 +1,99 @@
+name: vitago
+
+x-desviaciones: &desviaciones
+  DESVIACIONES_AUTOMATICAS_HABILITADAS: ${DESVIACIONES_AUTOMATICAS_HABILITADAS:-true}
+  DESVIACION_RADIO_METROS: ${DESVIACION_RADIO_METROS:-150}
+  DESVIACION_RADIO_REGRESO_METROS: ${DESVIACION_RADIO_REGRESO_METROS:-75}
+  DESVIACION_PERMANENCIA_SEGUNDOS: ${DESVIACION_PERMANENCIA_SEGUNDOS:-60}
+  DESVIACION_MINIMO_PUNTOS: ${DESVIACION_MINIMO_PUNTOS:-3}
+  DESVIACION_PRECISION_MAXIMA_METROS: ${DESVIACION_PRECISION_MAXIMA_METROS:-50}
+  DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS: ${DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS:-60}
+
+x-api: &api
+  image: ${IMAGEN_BACKEND:-vitago-backend:0.56.0}
+  pull_policy: ${POLITICA_DESCARGA_IMAGEN:-never}
+  build:
+    context: .
+    dockerfile: Dockerfile
+  init: true
+  restart: unless-stopped
+  stop_grace_period: 45s
+  cap_drop: [ALL]
+  security_opt: [no-new-privileges:true]
+  expose: ["8000"]
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  corporativo:
+    <<: *api
+    env_file:
+      - path: ${ARCHIVO_ENV_CORPORATIVO:-.env.render.corporativo}
+        required: true
+    environment:
+      <<: *desviaciones
+      DJANGO_SETTINGS_MODULE: config.settings.contenedor
+      ARCHIVO_ENTORNO_ADICIONAL: ""
+      PORT: "8000"
+      MODO_APLICACION: CORPORATIVO
+      RENDER: "false"
+      CONFIAR_PROXY_HTTPS: ${CONFIAR_PROXY_HTTPS_DOCKER:-false}
+      REDIRECCION_SSL: ${REDIRECCION_SSL_DOCKER:-false}
+    ports: ["${PUBLICAR_EN:-127.0.0.1}:${PUERTO_CORPORATIVO:-8001}:8000"]
+    networks: [red_corporativa]
+  network:
+    <<: *api
+    environment:
+      <<: *desviaciones
+      DJANGO_SETTINGS_MODULE: config.settings.contenedor
+      ARCHIVO_ENTORNO_ADICIONAL: ""
+      PORT: "8000"
+      NOMBRE_APLICACION: VitaGo Network
+      MODO_APLICACION: EXTERNO
+      PROVEEDOR_AUTENTICACION: LOCAL
+      ENTORNO: PRUEBAS
+      DEPURACION: "false"
+      RENDER: "false"
+      REDIRECCION_SSL: ${REDIRECCION_SSL_DOCKER:-false}
+      CONFIAR_PROXY_HTTPS: ${CONFIAR_PROXY_HTTPS_DOCKER:-false}
+      SERVIDORES_PERMITIDOS: ${SERVIDORES_DOCKER:-localhost,127.0.0.1}
+      ORIGENES_WEB_PERMITIDOS: ${ORIGENES_WEB_DOCKER:-}
+      ZONA_HORARIA_PREDETERMINADA: America/Tegucigalpa
+      HABILITAR_RUTAS_GOOGLE: "false"
+      URL_BASE_DATOS: postgresql://vitago_network:${CLAVE_DB_NETWORK:?Genere .env.docker con scripts/docker/crear_entorno_local.py}@bd_network:5432/vitago
+      NOMBRE_BASE_DATOS: vitago
+      CLAVE_SECRETA: ${CLAVE_SECRETA_NETWORK:?Falta CLAVE_SECRETA_NETWORK}
+      CLAVE_FIRMA_JWT_LOCAL: ${CLAVE_JWT_NETWORK:?Falta CLAVE_JWT_NETWORK}
+      CLAVE_HASH_TOKEN_REFRESCO_LOCAL: ${CLAVE_REFRESCO_NETWORK:?Falta CLAVE_REFRESCO_NETWORK}
+      EMISOR_JWT_LOCAL: vitago-network-docker
+      AUDIENCIA_JWT_LOCAL: vitago-network-docker
+    ports: ["${PUBLICAR_EN:-127.0.0.1}:${PUERTO_NETWORK:-8000}:8000"]
+    depends_on:
+      bd_network:
+        condition: service_healthy
+    networks: [red_network]
+  bd_network:
+    image: postgres:16-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: vitago
+      POSTGRES_USER: vitago_network
+      POSTGRES_PASSWORD: ${CLAVE_DB_NETWORK:?Falta CLAVE_DB_NETWORK}
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    volumes: [datos_network:/var/lib/postgresql/data]
+    networks: [red_network]
+
+networks:
+  red_corporativa:
+  red_network:
+
+volumes:
+  datos_network:

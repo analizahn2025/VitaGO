@@ -130,6 +130,7 @@ class PruebasModalidadesCorporativas(TestCase):
             tipo="MOTOCICLETA",
         )
         cls.repartidor = Repartidor.objects.create(
+            pais_operacion=(cls.empresa).pais, departamento_operacion="Francisco Morazán",
             usuario=cls.usuario_repartidor,
             empresa=cls.empresa,
             vehiculo=cls.vehiculo,

@@ -43,6 +43,7 @@ class PruebasMiPerfilMotorista(TestCase):
             tipo="MOTOCICLETA",
         )
         cls.repartidor = Repartidor.objects.create(
+            pais_operacion=pais, departamento_operacion="Francisco Morazán",
             usuario=cls.usuario,
             empresa=empresa,
             vehiculo=vehiculo,

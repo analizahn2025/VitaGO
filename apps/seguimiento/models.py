@@ -134,6 +134,31 @@ class RegistroUbicacion(ModeloUUIDConMarcasDeTiempo):
         return f"{self.repartidor_id} - {self.registrada_en:%Y-%m-%d %H:%M:%S}"
 
 
+class DesviacionRuta(ModeloUUIDConMarcasDeTiempo):
+    """Aviso operativo propio; no conserva métricas ni geometrías de Google."""
+
+    repartidor = models.ForeignKey("repartidores.Repartidor", on_delete=models.PROTECT, related_name="desviaciones_ruta")
+    jornada = models.ForeignKey("jornadas.JornadaRepartidor", on_delete=models.PROTECT, related_name="desviaciones_ruta")
+    solicitud = models.ForeignKey("solicitudes.Solicitud", on_delete=models.PROTECT, related_name="desviaciones_ruta")
+    calculo = models.ForeignKey("rutas.CalculoRutaVial", on_delete=models.PROTECT, related_name="desviaciones_ruta")
+    evento = models.OneToOneField("solicitudes.EventoSolicitud", on_delete=models.PROTECT, related_name="desviacion_ruta")
+    tipo_parada = models.CharField(max_length=16, choices=(("RECOLECCION", "Recolección"), ("ENTREGA", "Entrega")))
+    iniciada_en = models.DateTimeField()
+    detectada_en = models.DateTimeField()
+    finalizada_en = models.DateTimeField(null=True, blank=True)
+    motivo_cierre = models.CharField(max_length=32, blank=True)
+
+    class Meta:
+        db_table = "desviaciones_ruta"
+        ordering = ("detectada_en", "id")
+        indexes = [models.Index(fields=("repartidor", "detectada_en"), name="desvio_repart_fecha_idx")]
+        constraints = [
+            models.UniqueConstraint(fields=("repartidor",), condition=models.Q(finalizada_en__isnull=True), name="desvio_repart_abierto_uniq"),
+            models.CheckConstraint(condition=models.Q(detectada_en__gte=models.F("iniciada_en")), name="desvio_deteccion_fechas_ck"),
+            models.CheckConstraint(condition=models.Q(finalizada_en__isnull=True) | models.Q(finalizada_en__gte=models.F("detectada_en")), name="desvio_cierre_fechas_ck"),
+        ]
+
+
 class RevisionKilometraje(ModeloUUIDConMarcasDeTiempo):
     """Auditoría de cálculos nuevos y de consolidaciones por GPS tardío."""
 

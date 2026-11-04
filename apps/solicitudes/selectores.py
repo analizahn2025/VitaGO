@@ -18,8 +18,7 @@ from apps.solicitudes.opciones import EstadoSolicitud, ModalidadSolicitud
 from apps.ubicaciones.models import UbicacionEmpresa
 from apps.ubicaciones.opciones import EstadoUbicacion, EstadoUbicacionEmpresa
 from apps.usuarios.servicios import (
-    obtener_alcances_permiso,
-    usuario_tiene_permiso,
+    obtener_alcances_permisos,
 )
 
 
@@ -36,13 +35,10 @@ def _consulta_base_solicitudes():
         "empresa",
         "sucursal",
         "solicitada_por",
-        "repartidor_asignado",
-        "repartidor_asignado__usuario",
-        "repartidor_asignado__vehiculo",
         "tipo_servicio",
         "origen",
         "destino",
-    ).prefetch_related("movimientos_especiales__jornada")
+    ).prefetch_related("movimientos_especiales")
 
 
 def listar_tipos_servicio_autorizados(usuario):
@@ -52,10 +48,7 @@ def listar_tipos_servicio_autorizados(usuario):
         "solicitud.ver_propias",
         "solicitud.ver_asignadas",
     )
-    if not any(
-        obtener_alcances_permiso(usuario, codigo).tiene_algun_alcance
-        for codigo in codigos
-    ):
+    if not any(alcance.tiene_algun_alcance for alcance in obtener_alcances_permisos(usuario, codigos).values()):
         raise PermissionDenied(
             "No tiene permisos para consultar tipos de servicio."
         )
@@ -63,7 +56,10 @@ def listar_tipos_servicio_autorizados(usuario):
 
 
 def _obtener_empresa_para_creacion(usuario, empresa_id):
-    alcances = obtener_alcances_permiso(usuario, "solicitud.crear")
+    permisos = obtener_alcances_permisos(usuario, (
+        "solicitud.crear", "solicitud.crear_envio_especial",
+    ))
+    alcances = permisos["solicitud.crear"]
     if not alcances.tiene_algun_alcance:
         raise PermissionDenied(
             'No tiene el permiso requerido: "solicitud.crear".'
@@ -79,7 +75,8 @@ def _obtener_empresa_para_creacion(usuario, empresa_id):
         raise Http404(
             "La empresa no existe o no está dentro de su alcance."
         ) from error
-    return empresa, alcances
+    puede_crear_especial = permisos["solicitud.crear_envio_especial"].permite_todas_las_sucursales_de(empresa.id)
+    return empresa, alcances, puede_crear_especial
 
 
 def _sucursales_origen_autorizadas(
@@ -107,16 +104,17 @@ def _sucursales_origen_autorizadas(
                 "La sucursal no existe o no está dentro de su alcance."
             )
         consulta = consulta.filter(id=sucursal_id)
-        if not consulta.exists():
-            raise Http404(
-                "La sucursal no existe, está inactiva o no puede ser origen."
-            )
     elif not (
         alcances.global_
         or empresa.id in alcances.empresas
     ):
         consulta = consulta.filter(id__in=alcances.sucursales)
-    return consulta.order_by("nombre", "id")
+    consulta = consulta.order_by("nombre", "id")
+    if sucursal_id and not consulta:
+        raise Http404(
+            "La sucursal no existe, está inactiva o no puede ser origen."
+        )
+    return consulta
 
 
 def _convertir_sucursales_en_puntos(sucursales):
@@ -134,7 +132,7 @@ def obtener_opciones_creacion_solicitud(usuario, filtros):
     if settings.MODO_APLICACION == "EXTERNO":
         raise CreacionSolicitudNoDisponible()
 
-    empresa, alcances = _obtener_empresa_para_creacion(
+    empresa, alcances, puede_crear_especial = _obtener_empresa_para_creacion(
         usuario,
         filtros["empresa_id"],
     )
@@ -144,11 +142,6 @@ def obtener_opciones_creacion_solicitud(usuario, filtros):
         filtros.get("sucursal_id"),
     )
     origenes = _convertir_sucursales_en_puntos(sucursales_origen)
-    puede_crear_especial = usuario_tiene_permiso(
-        usuario,
-        "solicitud.crear_envio_especial",
-        empresa=empresa,
-    )
     modalidades = [
         {
             "codigo": ModalidadSolicitud.ENTRE_SUCURSALES,
@@ -281,15 +274,19 @@ def obtener_opciones_creacion_solicitud(usuario, filtros):
 
 def listar_solicitudes_autorizadas(usuario, filtros=None):
     """Une visibilidad administrativa y propia sin ampliar alcances."""
-    alcances_generales = obtener_alcances_permiso(usuario, "solicitud.ver")
-    alcances_propios = obtener_alcances_permiso(
-        usuario,
-        "solicitud.ver_propias",
-    )
-    alcances_asignados = obtener_alcances_permiso(
-        usuario,
-        "solicitud.ver_asignadas",
-    )
+    return _listar_solicitudes_con_alcances(usuario, _alcances_lectura(usuario), filtros)
+
+
+def _alcances_lectura(usuario):
+    return obtener_alcances_permisos(usuario, (
+        "solicitud.ver", "solicitud.ver_propias", "solicitud.ver_asignadas",
+    ))
+
+
+def _listar_solicitudes_con_alcances(usuario, alcances, filtros):
+    alcances_generales = alcances["solicitud.ver"]
+    alcances_propios = alcances["solicitud.ver_propias"]
+    alcances_asignados = alcances["solicitud.ver_asignadas"]
     if not any(
         (
             alcances_generales.tiene_algun_alcance,
@@ -318,7 +315,7 @@ def listar_solicitudes_autorizadas(usuario, filtros=None):
                 repartidor_asignado__usuario_id=usuario.pk,
             )
 
-    consulta = _consulta_base_solicitudes().filter(filtro_visibilidad).distinct()
+    consulta = _consulta_base_solicitudes().filter(filtro_visibilidad)
     filtros = filtros or {}
     if filtros.get("empresa_id"):
         consulta = consulta.filter(empresa_id=filtros["empresa_id"])
@@ -341,13 +338,14 @@ def listar_solicitudes_autorizadas(usuario, filtros=None):
 
 def agrupar_solicitudes_autorizadas(usuario, por, filtros=None):
     """Agrupa solamente solicitudes de alcance administrativo autorizado."""
-    alcances = obtener_alcances_permiso(usuario, "solicitud.ver")
+    permisos = _alcances_lectura(usuario)
+    alcances = permisos["solicitud.ver"]
     if not alcances.tiene_algun_alcance:
         raise PermissionDenied(
             'No tiene el permiso requerido: "solicitud.ver".'
         )
 
-    consulta = listar_solicitudes_autorizadas(usuario, filtros)
+    consulta = _listar_solicitudes_con_alcances(usuario, permisos, filtros)
     if not alcances.global_:
         consulta = consulta.filter(_filtro_por_alcances(alcances))
     consulta = consulta.order_by()
@@ -382,7 +380,7 @@ def agrupar_solicitudes_autorizadas(usuario, por, filtros=None):
     raise ValueError("La agrupación solicitada no es válida.")
 
 
-def _resumir_consulta_solicitudes(consulta):
+def _resumir_consulta_solicitudes(consulta, **conteos_adicionales):
     pendientes = (EstadoSolicitud.PENDIENTE, EstadoSolicitud.ASIGNADA)
     activas = (
         EstadoSolicitud.HACIA_RECOLECCION,
@@ -422,6 +420,7 @@ def _resumir_consulta_solicitudes(consulta):
             filter=Q(estado=EstadoSolicitud.CANCELADA),
             distinct=True,
         ),
+        **conteos_adicionales,
     )
     return conteos, consulta[:5]
 
@@ -435,7 +434,6 @@ def obtener_resumen_solicitante_autorizado(usuario, filtros=None):
     """Conserva acumulados y agrega entregas del día operativo solicitado."""
     filtros = filtros or {}
     consulta = listar_solicitudes_autorizadas(usuario, filtros)
-    conteos, recientes = _resumir_consulta_solicitudes(consulta)
     zona = ZoneInfo(
         getattr(
             settings,
@@ -448,6 +446,15 @@ def obtener_resumen_solicitante_autorizado(usuario, filtros=None):
         fecha = timezone.localdate(timezone.now(), timezone=zona)
     inicio = datetime.combine(fecha, time.min, tzinfo=zona)
     siguiente = datetime.combine(fecha + timedelta(days=1), time.min, tzinfo=zona)
+    conteos, recientes = _resumir_consulta_solicitudes(
+        consulta,
+        entregadas_del_dia=Count(
+            "id", filter=Q(
+                estado=EstadoSolicitud.ENTREGADA,
+                entregada_en__gte=inicio, entregada_en__lt=siguiente,
+            ), distinct=True,
+        ),
+    )
     entregas_del_dia = consulta.filter(
         estado=EstadoSolicitud.ENTREGADA,
         entregada_en__gte=inicio,
@@ -458,20 +465,18 @@ def obtener_resumen_solicitante_autorizado(usuario, filtros=None):
         "recientes": recientes,
         "fecha_operativa": fecha.isoformat(),
         "zona_horaria_operativa": zona.key,
-        "entregadas_del_dia": entregas_del_dia.count(),
         "entregas_recientes_del_dia": entregas_del_dia.order_by(
             "-entregada_en", "-id"
         )[:5],
     }
 
 
-def obtener_solicitud_autorizada(usuario, identificador_solicitud):
-    consulta = listar_solicitudes_autorizadas(usuario).prefetch_related(
-        "articulos",
-        "eventos",
-        "asignaciones__repartidor__usuario",
-        "asignaciones__repartidor__vehiculo",
-    )
+def obtener_solicitud_autorizada(usuario, identificador_solicitud, *, incluir_historial=True):
+    consulta = listar_solicitudes_autorizadas(usuario)
+    if incluir_historial:
+        consulta = consulta.prefetch_related("articulos", "eventos", "asignaciones")
+    else:
+        consulta = consulta.prefetch_related(None)
     try:
         return consulta.get(id=identificador_solicitud)
     except (Solicitud.DoesNotExist, ValueError) as error:

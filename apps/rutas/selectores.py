@@ -27,7 +27,7 @@ ESTADOS_ANTES_RECOLECCION = {
 
 def _obtener_repartidor_propio(usuario):
     try:
-        repartidor = Repartidor.objects.select_related("empresa").get(
+        repartidor = Repartidor.objects.select_related("empresa__pais").get(
             usuario=usuario,
             activo=True,
         )
@@ -116,17 +116,22 @@ def obtener_mi_ruta(usuario):
     from apps.rutas.presentacion import presentar_mapa_integrado
     from apps.rutas.ruta_vial import presentar_ruta_vial
     from apps.seguimiento.llegadas import obtener_llegada_actual
+    from apps.seguimiento.captura import captura_cercana_para_paradas
+    from apps.jornadas.horario import jornada_vigente
+    from apps.repartidores.opciones import EstadoOperativoRepartidor
+    from apps.seguimiento.desviaciones import obtener_desviacion_actual
     from apps.solicitudes.flujo_automatico import presentar_flujo_actual
 
     repartidor = _obtener_repartidor_propio(usuario)
-    jornada_id = (
+    jornada = (
         JornadaRepartidor.objects.filter(
             repartidor=repartidor,
             estado=EstadoJornada.ACTIVA,
         )
-        .values_list("id", flat=True)
         .first()
     )
+    if jornada is not None:
+        jornada.repartidor = repartidor
     ruta = RutaRepartidor.objects.filter(
         repartidor=repartidor,
         estado=RutaRepartidor.Estado.ACTIVA,
@@ -139,7 +144,7 @@ def obtener_mi_ruta(usuario):
     ruta_vial = presentar_ruta_vial(ruta, paradas, version_actual)
     return {
         "repartidor_id": repartidor.id,
-        "jornada_id": jornada_id,
+        "jornada_id": jornada.pk if jornada else None,
         "ruta_id": ruta.id if ruta else None,
         "version_actual": version_actual,
         "orden_tipo": "CERCANIA_GPS",
@@ -148,6 +153,13 @@ def obtener_mi_ruta(usuario):
         "mapa": presentar_mapa_integrado(paradas, ruta_vial),
         "proxima_parada": paradas[0] if paradas else None,
         "llegada_actual": obtener_llegada_actual(repartidor, paradas),
+        "alerta_desviacion": obtener_desviacion_actual(repartidor, paradas),
         "flujo_actual": presentar_flujo_actual(paradas),
+        "captura_cercana": captura_cercana_para_paradas(
+            paradas,
+            jornada_vigente=jornada_vigente(jornada) and repartidor.estado_operativo in (
+                EstadoOperativoRepartidor.DISPONIBLE, EstadoOperativoRepartidor.EN_RUTA,
+            ),
+        ),
         "paradas": paradas,
     }

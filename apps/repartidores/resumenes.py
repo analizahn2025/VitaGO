@@ -19,15 +19,15 @@ from apps.repartidores.limites import obtener_limites_repartidor
 from apps.repartidores.models import Repartidor
 from apps.repartidores.selectores import listar_repartidores_autorizados
 from apps.solicitudes.models import AsignacionSolicitud, Solicitud
-from apps.usuarios.servicios import obtener_alcances_permiso
+from apps.usuarios.servicios import obtener_alcances_permisos
 
 
 def listar_motoristas_para_resumen(usuario, filtros):
     consulta = listar_repartidores_autorizados(usuario, filtros)
     # Un permiso de sucursal no habilita el historial completo de un motorista.
     # En Network, empresa_id=null requiere alcance global en todos los permisos.
-    for codigo in ("repartidor.ver", "reporte.ver", "solicitud.ver", "jornada.ver", "evidencia.ver"):
-        alcances = obtener_alcances_permiso(usuario, codigo)
+    permisos = ("repartidor.ver", "reporte.ver", "solicitud.ver", "jornada.ver", "evidencia.ver")
+    for codigo, alcances in obtener_alcances_permisos(usuario, permisos).items():
         if not alcances.tiene_algun_alcance:
             raise PermissionDenied(f'No tiene el permiso requerido: "{codigo}".')
         if not alcances.global_:
@@ -59,7 +59,8 @@ def lecturas_temperatura(repartidores, inicio, fin):
     return EvidenciaSolicitud.objects.filter(
         repartidor_id__in=repartidores, tipo="FOTO_RECOLECCION",
         capturada_en__gte=inicio, capturada_en__lt=fin,
-    ).order_by("-capturada_en", "-id")
+    ).only("id", "repartidor_id", "solicitud_id", "solicitud__numero",
+           "temperatura_contenedor_c", "fuente_temperatura", "capturada_en").order_by("-capturada_en", "-id")
 
 
 def _lectura(lectura):
@@ -177,11 +178,15 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
     return resultados
 
 
-def construir_resumenes(motoristas, fecha=None, *, ahora=None):
+def construir_resumenes(motoristas, fecha=None, *, ahora=None, fecha_hasta=None):
     ahora = ahora or timezone.now()
     grupos, periodos = defaultdict(list), {}
     for r in motoristas:
         periodos[r.pk] = periodo_operativo(r, fecha, ahora)
+        if fecha_hasta is not None:
+            dia, zona, inicio, _ = periodos[r.pk]
+            fin = periodo_operativo(r, fecha_hasta, ahora)[3]
+            periodos[r.pk] = dia, zona, inicio, fin
         grupos[periodos[r.pk][2:]].append(r)
     metricas = {}
     for (inicio, fin), grupo in grupos.items():

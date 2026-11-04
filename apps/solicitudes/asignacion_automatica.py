@@ -3,17 +3,28 @@
 from math import asin, cos, radians, sin, sqrt
 
 from django.conf import settings
-from django.db.models import OuterRef, Subquery
+from django.db.models import Exists, OuterRef, Subquery
 
 from apps.repartidores.capacidad import (
     anotar_carga_repartidores,
     filtrar_repartidores_disponibles,
 )
 from apps.repartidores.models import Repartidor
+from apps.repartidores.cobertura import filtrar_cobertura_origen
 from apps.seguimiento.vigencia import posiciones_vigentes
 
 
 RADIO_TERRESTRE_KM = 6371.0088
+
+
+def hay_motoristas_disponibles(empresa_id):
+    """Precomprobación; asignar sigue validando cada cupo bajo bloqueo."""
+    consulta = filtrar_repartidores_disponibles(
+        anotar_carga_repartidores(Repartidor.objects.filter(empresa_id=empresa_id))
+    )
+    if settings.ASIGNACION_REQUIERE_GPS_VIGENTE:
+        consulta = consulta.filter(Exists(posiciones_vigentes().filter(repartidor_id=OuterRef("pk"))))
+    return consulta.exists()
 
 
 def distancia_linea_recta_km(latitud_a, longitud_a, latitud_b, longitud_b):
@@ -41,7 +52,7 @@ def candidatos_ordenados(solicitud):
     empresa_id = None if settings.MODO_APLICACION == "EXTERNO" else solicitud.empresa_id
     consulta = filtrar_repartidores_disponibles(
         anotar_carga_repartidores(
-            Repartidor.objects.filter(empresa_id=empresa_id)
+            filtrar_cobertura_origen(Repartidor.objects.filter(empresa_id=empresa_id), solicitud.origen)
         ), solicitud.cantidad_tubos, solicitud.cantidad_frascos
     ).annotate(
         ultima_latitud=Subquery(ultimo_gps.values("latitud")[:1]),

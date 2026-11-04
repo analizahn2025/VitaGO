@@ -26,6 +26,8 @@ from apps.usuarios.models import Usuario
     PASSWORD_HASHERS=["django.contrib.auth.hashers.MD5PasswordHasher"],
 )
 class PruebasConcurrenciaInicioSesion(TransactionTestCase):
+    serialized_rollback = True
+
     @classmethod
     def _comprobar_base_temporal(cls):
         base = connection.settings_dict["NAME"]

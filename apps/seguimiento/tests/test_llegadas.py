@@ -397,6 +397,15 @@ class PruebasLlegadasAutomaticas(TestCase):
             "antiguedad_maxima_segundos": 30,
             "solo_proxima_parada": True,
             "destino_especial_sin_coordenadas_manual": True,
+            "captura_cercana": {
+                "habilitada": True,
+                "radio_activacion_metros": 250,
+                "radio_desactivacion_metros": 350,
+                "intervalo_captura_segundos": 5,
+                "intervalo_envio_segundos": 5,
+                "enviar_al_entrar": True,
+                "aplica_detenido": True,
+            },
         })
 
     def test_no_salta_la_primera_parada_para_llegar_a_otro_envio(self):
@@ -640,6 +649,42 @@ class PruebasHTTPCommitLlegadas(TransactionTestCase):
         self.solicitud.refresh_from_db()
         self.assertEqual(self.solicitud.estado, EstadoSolicitud.EN_RECOLECCION)
         self.assertTrue(EventoSolicitud.objects.filter(pk=llegada["evento_id"]).exists())
+
+    def test_captura_cercana_tres_envios_cada_cinco_segundos_abren_foto(self):
+        RegistroUbicacion.objects.filter(jornada=self.jornada).delete()
+        cliente = self._cliente()
+        sesion = uuid.uuid4()
+        ultimo_cuerpo = None
+        for secuencia, segundos in enumerate((0, 5, 10), start=1):
+            ahora = self.ahora + timedelta(seconds=segundos)
+            cuerpo = {
+                "jornada_id": str(self.jornada.pk),
+                "registros": [{
+                    "id_cliente": str(uuid.uuid4()), "sesion_gps": str(sesion), "secuencia": secuencia,
+                    "latitud": str(self.origen.latitud), "longitud": str(self.origen.longitud),
+                    "precision_metros": "8", "registrada_en": ahora.isoformat(),
+                }],
+            }
+            with patch("django.utils.timezone.now", return_value=ahora):
+                respuesta = cliente.post(reverse("seguimiento:registros"), cuerpo, format="json")
+            self.assertEqual(respuesta.status_code, 201, respuesta.data)
+            llegadas = respuesta.json()["llegadas_detectadas"]
+            self.assertEqual(len(llegadas), 1 if segundos == 10 else 0)
+            ultimo_cuerpo = cuerpo
+        self.assertEqual(llegadas[0]["pantalla"], "RECOLECCION")
+        self.solicitud.refresh_from_db()
+        self.assertEqual(self.solicitud.estado, EstadoSolicitud.EN_RECOLECCION)
+        with patch("django.utils.timezone.now", return_value=ahora):
+            ruta = cliente.get(reverse("rutas:mi-ruta")).json()
+            repetido = cliente.post(reverse("seguimiento:registros"), ultimo_cuerpo, format="json")
+        self.assertFalse(ruta["captura_cercana"]["habilitada"])
+        self.assertIsNone(ruta["captura_cercana"]["objetivo"])
+        self.assertEqual(ruta["llegada_actual"]["evento_id"], llegadas[0]["evento_id"])
+        self.assertEqual(repetido.status_code, 201)
+        self.assertEqual(repetido.json()["llegadas_detectadas"], [])
+        self.assertEqual(EventoSolicitud.objects.filter(
+            solicitud=self.solicitud, tipo=TipoEventoSolicitud.LLEGADA_RECOLECCION,
+        ).count(), 1)
 
     def test_fallo_detector_no_rompe_http_y_reintento_identico_recupera(self):
         with (

@@ -68,6 +68,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             nombre="Prueba de asignación",
         )
         cls.origen = Ubicacion.objects.create(
+            nivel_administrativo_1="Francisco Morazán",
             nombre="Origen",
             tipo_ubicacion=tipo_ubicacion,
             origen=OrigenUbicacion.REGISTRADA_USUARIO,
@@ -77,6 +78,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             longitud=Decimal("-87.192100"),
         )
         cls.destino = Ubicacion.objects.create(
+            nivel_administrativo_1="Francisco Morazán",
             nombre="Destino",
             tipo_ubicacion=tipo_ubicacion,
             origen=OrigenUbicacion.REGISTRADA_USUARIO,
@@ -119,6 +121,7 @@ class PruebasAsignacionesSolicitud(TestCase):
             )
             cls.repartidores.append(
                 Repartidor.objects.create(
+                    pais_operacion=(cls.empresa).pais, departamento_operacion="Francisco Morazán",
                     usuario=usuario,
                     empresa=cls.empresa,
                     vehiculo=vehiculo,

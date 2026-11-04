@@ -3,6 +3,7 @@
 .env.*
 !.env.example
 !.env.corporativo.example
+!.env.docker.example
 __pycache__/
 *.py[cod]
 *.sqlite3

@@ -1,5 +1,6 @@
 from django.core.exceptions import ValidationError
 from django.db import models
+from apps.geografia.normalizacion import clave_departamento, nombre_departamento
 
 from apps.nucleo.models import ModeloUUIDConMarcasDeTiempo
 from apps.repartidores.opciones import (
@@ -40,11 +41,19 @@ class Repartidor(ModeloUUIDConMarcasDeTiempo):
     )
     activo = models.BooleanField(default=True)
     limite_tubos = models.PositiveIntegerField(default=20)
+    pais_operacion = models.ForeignKey("geografia.Pais", on_delete=models.PROTECT, null=True, blank=True, related_name="motoristas_operativos")
+    departamento_operacion = models.CharField(max_length=150, blank=True, default="")
+    departamento_operacion_clave = models.CharField(max_length=150, blank=True, default="", editable=False)
+
+    @property
+    def cobertura_configurada(self):
+        return bool(self.pais_operacion_id and self.departamento_operacion_clave)
 
     class Meta:
         db_table = "repartidores"
         ordering = ("usuario__nombres", "usuario__apellidos", "id")
         indexes = [
+            models.Index(fields=("pais_operacion", "departamento_operacion_clave", "activo"), name="repart_pais_depto_act_idx"),
             models.Index(
                 fields=("empresa", "activo", "estado_operativo"),
                 name="repart_emp_act_est_idx",
@@ -55,6 +64,10 @@ class Repartidor(ModeloUUIDConMarcasDeTiempo):
             ),
         ]
         constraints = [
+            models.CheckConstraint(condition=(
+                models.Q(pais_operacion__isnull=True, departamento_operacion="", departamento_operacion_clave="")
+                | (models.Q(pais_operacion__isnull=False) & ~models.Q(departamento_operacion="") & ~models.Q(departamento_operacion_clave=""))
+            ), name="repart_cobertura_pareja_ck"),
             models.CheckConstraint(condition=models.Q(limite_tubos__gte=1), name="repart_limite_tubos_ck"),
             models.CheckConstraint(
                 condition=models.Q(
@@ -73,6 +86,14 @@ class Repartidor(ModeloUUIDConMarcasDeTiempo):
     def clean(self):
         super().clean()
         errores = {}
+        self.departamento_operacion = nombre_departamento(self.departamento_operacion)
+        self.departamento_operacion_clave = clave_departamento(self.departamento_operacion)
+        if len(self.departamento_operacion_clave) > 150:
+            errores["departamento_operacion"] = "El departamento normalizado supera la longitud permitida."
+        if bool(self.pais_operacion_id) != bool(self.departamento_operacion):
+            errores["departamento_operacion"] = "Debe indicar conjuntamente país y departamento de operación."
+        if self.empresa_id and self.pais_operacion_id and self.empresa.pais_id != self.pais_operacion_id:
+            errores["pais_operacion"] = "El país de operación debe coincidir con el país de la empresa."
         if self.usuario_id and self.empresa_id:
             if self.usuario.empresa_id != self.empresa_id:
                 errores["usuario"] = (
@@ -88,6 +109,8 @@ class Repartidor(ModeloUUIDConMarcasDeTiempo):
 
     def save(self, *args, **kwargs):
         self.clean()
+        if kwargs.get("update_fields") and "departamento_operacion" in kwargs["update_fields"]:
+            kwargs["update_fields"] = (*kwargs["update_fields"], "departamento_operacion_clave")
         return super().save(*args, **kwargs)
 
     def __str__(self):

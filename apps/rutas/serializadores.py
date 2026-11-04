@@ -2,7 +2,7 @@
 
 from rest_framework import serializers
 
-from apps.seguimiento.serializadores import SerializadorLlegadaDetectada
+from apps.seguimiento.serializadores import SerializadorCapturaCercana, SerializadorLlegadaDetectada
 from apps.solicitudes.opciones import (
     EstadoSolicitud,
     ModalidadSolicitud,
@@ -52,7 +52,9 @@ class SerializadorMiRuta(serializers.Serializer):
     mapa = SerializadorMapaIntegrado()
     ruta_vial = serializers.JSONField()
     llegada_actual = SerializadorLlegadaDetectada(allow_null=True)
+    alerta_desviacion = serializers.JSONField(allow_null=True)
     flujo_actual = serializers.JSONField()
+    captura_cercana = SerializadorCapturaCercana()
 
 
 class SerializadorCalcularRuta(serializers.Serializer):

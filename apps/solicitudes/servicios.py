@@ -11,7 +11,7 @@ from django.utils import timezone
 from rest_framework.exceptions import PermissionDenied, ValidationError
 
 from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
-from apps.solicitudes.asignacion_automatica import candidatos_ordenados
+from apps.solicitudes.asignacion_automatica import candidatos_ordenados, hay_motoristas_disponibles
 from apps.solicitudes.recipientes import TIPOS_RECIPIENTE, validar_cantidades_recipientes
 from apps.solicitudes.cobertura import comparten_departamento, departamento_normalizado
 from apps.organizaciones.models import Empresa, Sucursal
@@ -304,6 +304,13 @@ def _validar_repartidor_disponible(repartidor, solicitud):
     from apps.solicitudes.vigencia import exigir_vigencia_solicitud
 
     exigir_vigencia_solicitud(solicitud)
+    if settings.MODO_APLICACION == "CORPORATIVO":
+        if repartidor.empresa_id != solicitud.empresa_id:
+            raise ValidationError({"repartidor_id": "El motorista pertenece a otra empresa."})
+    elif repartidor.empresa_id is not None:
+        raise ValidationError({"repartidor_id": "El motorista de Network debe tener alcance global."})
+    from apps.repartidores.cobertura import validar_cobertura_solicitud
+    validar_cobertura_solicitud(repartidor, solicitud)
     # Orden de bloqueo: solicitud -> motorista -> configuración compartida.
     limites = obtener_limites_repartidor(repartidor, bloquear=True)
     cantidad = contar_solicitudes_activas(repartidor)
@@ -352,16 +359,6 @@ def _validar_repartidor_disponible(repartidor, solicitud):
         raise ValidationError(
             {"repartidor_id": "El motorista debe tener un vehículo activo."}
         )
-    if settings.MODO_APLICACION == "CORPORATIVO":
-        if repartidor.empresa_id != solicitud.empresa_id:
-            raise ValidationError(
-                {"repartidor_id": "El motorista pertenece a otra empresa."}
-            )
-    elif repartidor.empresa_id is not None:
-        raise ValidationError(
-            {"repartidor_id": "El motorista de Network debe tener alcance global."}
-        )
-
     _validar_rol_operativo_repartidor(repartidor, solicitud.empresa)
     if MovimientoEnvioEspecial.objects.filter(
         repartidor=repartidor,
@@ -644,19 +641,26 @@ def _asignar_automaticamente(solicitud, usuario):
     return solicitud
 
 
-@transaction.atomic
-def _reintentar_primera_solicitud_pendiente(empresa_id, excluir_ids=()):
-    """Bloquea la pendiente más antigua antes de buscar un motorista."""
-    solicitud = (
-        Solicitud.objects.select_for_update(of=("self",), skip_locked=True, no_key=True)
-        .select_related("empresa", "origen", "solicitada_por")
+def _consulta_solicitudes_pendientes(empresa_id):
+    return (
+        Solicitud.objects
         .filter(
             empresa_id=empresa_id,
             repartidor_asignado__isnull=True,
         )
         .filter(Q(estado=EstadoSolicitud.PENDIENTE) | Q(reasignacion_pendiente=True, estado__in=ESTADOS_SOLICITUD_ACTIVOS))
-        .exclude(pk__in=excluir_ids)
         .filter(cantidad_tubos__isnull=False, cantidad_frascos__isnull=False)
+    )
+
+
+@transaction.atomic
+def _reintentar_primera_solicitud_pendiente(empresa_id, excluir_ids=()):
+    """Bloquea la pendiente más antigua antes de buscar un motorista."""
+    solicitud = (
+        _consulta_solicitudes_pendientes(empresa_id)
+        .select_for_update(of=("self",), skip_locked=True, no_key=True)
+        .select_related("empresa__pais", "origen", "solicitada_por")
+        .exclude(pk__in=excluir_ids)
         .order_by("-reasignacion_pendiente", "creado_en", "id")
         .first()
     )
@@ -691,13 +695,21 @@ def reintentar_solicitudes_pendientes(empresa_id):
     return asignadas
 
 
-def programar_reintento_pendientes(empresa_id):
+def programar_reintento_pendientes(empresa_id, *, verificar_disponibilidad=False):
     """Reintenta tras el commit para respetar el orden solicitud → motorista."""
     if settings.MODO_APLICACION != "CORPORATIVO" or empresa_id is None:
         return
 
     def reintentar_despues_del_commit():
         try:
+            # Un GPS frecuente no debe recorrer 50 pendientes con la flota llena.
+            # Los cierres diarios conservan su mantenimiento independiente y el
+            # reintento general sigue validando/cerrando solicitudes vencidas.
+            if verificar_disponibilidad and (
+                not _consulta_solicitudes_pendientes(empresa_id).exists()
+                or not hay_motoristas_disponibles(empresa_id)
+            ):
+                return
             reintentar_solicitudes_pendientes(empresa_id)
         except Exception:
             registro.exception(

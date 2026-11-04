@@ -116,6 +116,7 @@ class PruebasIncidencias(TestCase):
             )
             cls.repartidores.append(
                 Repartidor.objects.create(
+                    pais_operacion=(empresa).pais if empresa is not None else cls.pais, departamento_operacion="Francisco Morazán",
                     usuario=usuario,
                     empresa=empresa,
                     vehiculo=vehiculo,
@@ -128,6 +129,7 @@ class PruebasIncidencias(TestCase):
             nombre="Prueba de incidencia",
         )
         cls.origen = Ubicacion.objects.create(
+            nivel_administrativo_1="Francisco Morazán",
             nombre="Origen",
             tipo_ubicacion=tipo_ubicacion,
             origen=OrigenUbicacion.REGISTRADA_USUARIO,
@@ -137,6 +139,7 @@ class PruebasIncidencias(TestCase):
             longitud=Decimal("-87.192100"),
         )
         cls.destino = Ubicacion.objects.create(
+            nivel_administrativo_1="Francisco Morazán",
             nombre="Destino",
             tipo_ubicacion=tipo_ubicacion,
             origen=OrigenUbicacion.REGISTRADA_USUARIO,

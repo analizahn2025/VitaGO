@@ -24,7 +24,7 @@ def _filtro_alcances(alcances):
 
 def _consulta_base():
     return anotar_carga_repartidores(
-        Repartidor.objects.select_related("usuario", "empresa", "vehiculo")
+        Repartidor.objects.select_related("usuario", "empresa", "vehiculo", "pais_operacion")
     )
 
 
@@ -35,6 +35,14 @@ def listar_repartidores_autorizados(usuario, filtros=None):
 
     consulta = _consulta_base().filter(_filtro_alcances(alcances))
     filtros = filtros or {}
+    if filtros.get("pais_operacion_id"):
+        consulta = consulta.filter(pais_operacion_id=filtros["pais_operacion_id"])
+    if filtros.get("departamento_operacion"):
+        from apps.geografia.normalizacion import clave_departamento
+        consulta = consulta.filter(departamento_operacion_clave=clave_departamento(filtros["departamento_operacion"]))
+    if "cobertura_configurada" in filtros:
+        configuradas = Q(pais_operacion__isnull=False) & ~Q(departamento_operacion_clave="")
+        consulta = consulta.filter(configuradas) if filtros["cobertura_configurada"] else consulta.exclude(configuradas)
     if filtros.get("empresa_id"):
         consulta = consulta.filter(empresa_id=filtros["empresa_id"])
     if filtros.get("estado_operativo"):
@@ -57,8 +65,24 @@ def listar_repartidores_autorizados(usuario, filtros=None):
 
 
 def listar_repartidores_disponibles(usuario, filtros=None):
+    filtros = dict(filtros or {})
+    consulta = listar_repartidores_autorizados(usuario, filtros)
+    if filtros.get("solicitud_id"):
+        from apps.solicitudes.models import Solicitud
+        from apps.solicitudes.selectores import listar_solicitudes_autorizadas
+        from apps.repartidores.cobertura import filtrar_cobertura_origen
+        try:
+            solicitud = listar_solicitudes_autorizadas(usuario).select_related(None).select_related("origen").prefetch_related(None).get(pk=filtros["solicitud_id"])
+        except Solicitud.DoesNotExist as error:
+            raise Http404("La solicitud no existe o no está dentro de su alcance.") from error
+        consulta = filtrar_cobertura_origen(consulta, solicitud.origen)
+        from django.conf import settings
+        consulta = consulta.filter(empresa_id=solicitud.empresa_id if settings.MODO_APLICACION == "CORPORATIVO" else None)
+        filtros.update(cantidad_tubos=solicitud.cantidad_tubos or 0, cantidad_frascos=solicitud.cantidad_frascos or 0)
+        if solicitud.cantidad_tubos is None or solicitud.cantidad_frascos is None:
+            return consulta.none()
     return filtrar_repartidores_disponibles(
-        listar_repartidores_autorizados(usuario, filtros),
+        consulta,
         (filtros or {}).get("cantidad_tubos", 0), (filtros or {}).get("cantidad_frascos", 0),
     )
 

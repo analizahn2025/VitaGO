@@ -54,7 +54,9 @@ def calcular_capacidad(cantidad, *, limite_tubos=20, limite_frascos=20, limite_s
 
 def anotar_carga_repartidores(consulta):
     carga = Solicitud.objects.filter(repartidor_asignado_id=OuterRef("pk"), estado__in=ESTADOS_SOLICITUD_ACTIVOS).order_by().values("repartidor_asignado_id")
-    anotaciones = {}
+    # El índice motorista/estado acota también el conteo al trabajo vigente;
+    # unir todo el historial obligaría a agrupar cada motorista y sus relaciones.
+    anotaciones = {"solicitudes_activas_calculadas": Count("id")}
     for tipo in TIPOS_RECIPIENTE:
         anotaciones[f"{tipo}_comprometidos"] = Sum(f"cantidad_{tipo}")
         anotaciones[f"{tipo}_en_transporte"] = Sum(f"cantidad_{tipo}", filter=Q(estado__in=ESTADOS_CON_TUBOS_RECOGIDOS))
@@ -72,11 +74,6 @@ def anotar_carga_repartidores(consulta):
         campo: Coalesce(Subquery(carga.annotate(valor=expresion).values("valor"), output_field=IntegerField()), 0)
         for campo, expresion in anotaciones.items()
     }).annotate(
-        solicitudes_activas_calculadas=Count(
-            "solicitudes_asignadas",
-            filter=Q(solicitudes_asignadas__estado__in=ESTADOS_SOLICITUD_ACTIVOS),
-            distinct=True,
-        ),
         lleva_prioritario_exclusivo=Exists(prioritarias),
         tiene_especial_activo=Exists(especiales),
     )
@@ -85,6 +82,8 @@ def anotar_carga_repartidores(consulta):
 def filtrar_repartidores_disponibles(consulta, cantidad_tubos=0, cantidad_frascos=0):
     """Aplica la misma elegibilidad a listados y asignación automática."""
     consulta = consulta.filter(
+        pais_operacion__isnull=False,
+        pais_operacion__activo=True,
         activo=True,
         usuario__estado=EstadoUsuario.ACTIVO,
         tiene_rol_operativo_vigente=True,
@@ -99,7 +98,7 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=0, cantidad_frasco
         tiene_especial_activo=False,
         vehiculo__estado=EstadoVehiculo.ACTIVO,
         vehiculo__tipo=TipoVehiculo.MOTOCICLETA,
-    ).filter(
+    ).exclude(departamento_operacion_clave="").filter(
         Q(estado_operativo=EstadoOperativoRepartidor.DISPONIBLE)
         | Q(
             estado_operativo=EstadoOperativoRepartidor.EN_RUTA,
@@ -112,6 +111,8 @@ def filtrar_repartidores_disponibles(consulta, cantidad_tubos=0, cantidad_frasco
 
 
 def puede_recibir_solicitudes(repartidor, cantidad=None, *, carga=None):
+    if not repartidor.cobertura_configurada or not repartidor.pais_operacion.activo:
+        return False
     vigente = getattr(repartidor, "tiene_jornada_vigente", None)
     if vigente is None:
         from apps.jornadas.models import JornadaRepartidor

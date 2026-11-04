@@ -180,9 +180,11 @@ class PruebasRolesYPermisos(SimpleTestCase):
     @patch("apps.usuarios.servicios.permisos.RolUsuario.objetos.filter")
     def test_agrupa_alcances_de_un_permiso(self, filtrar_asignaciones):
         consulta = MagicMock()
+        consulta.order_by.return_value = consulta
         consulta.values_list.return_value.distinct.return_value = [
-            (TipoAlcanceRol.EMPRESA, self.empresa.id, None),
+            ("sucursal.ver", TipoAlcanceRol.EMPRESA, self.empresa.id, None),
             (
+                "sucursal.ver",
                 TipoAlcanceRol.SUCURSAL,
                 self.otra_empresa.id,
                 self.sucursal.id,

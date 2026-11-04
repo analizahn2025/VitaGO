@@ -32,7 +32,7 @@ class PruebasAlcanceFlotas(TestCase):
         usuario = Usuario.objetos.create(correo=f"flota{Usuario.objetos.count()}@prueba.test", nombres="Motorista", apellidos="Alcance", empresa=empresa)
         RolUsuario.objetos.create(usuario=usuario, rol=Rol.objetos.get(codigo="REPARTIDOR_CORPORATIVO" if empresa else "REPARTIDOR_RED"), tipo_alcance="EMPRESA" if empresa else "GLOBAL", empresa=empresa, asignado_por=self.administrador)
         vehiculo = Vehiculo.objects.create(empresa=empresa, placa=f"ALC-{Vehiculo.objects.count()}", tipo="MOTOCICLETA")
-        motorista = Repartidor.objects.create(usuario=usuario, empresa=empresa, vehiculo=vehiculo, estado_operativo="AVAILABLE")
+        motorista = Repartidor.objects.create(pais_operacion=(empresa).pais if empresa is not None else self.pais, departamento_operacion="Francisco Morazán", usuario=usuario, empresa=empresa, vehiculo=vehiculo, estado_operativo="AVAILABLE")
         self._registrar_gps(motorista, str(self.origen.latitud), str(self.origen.longitud))
         return motorista
 

@@ -103,12 +103,15 @@ def crear_repartidor(usuario, datos_validados):
         )
     _validar_rol_repartidor(usuario_objetivo, empresa)
     vehiculo = _obtener_vehiculo_activo(datos.pop("vehiculo_id", None), empresa)
+    from apps.repartidores.cobertura import preparar_cobertura
+    cobertura = preparar_cobertura(datos, empresa) if {"pais_operacion_id", "departamento_operacion"} & datos.keys() else {}
 
     try:
         return Repartidor.objects.create(
             usuario=usuario_objetivo,
             empresa=empresa,
             vehiculo=vehiculo,
+            **cobertura,
         )
     except IntegrityError as error:
         raise ValidationError(
@@ -124,6 +127,35 @@ def _puede_administrar_repartidor(usuario, repartidor):
             empresa=repartidor.empresa,
         )
     return obtener_alcances_permiso(usuario, "repartidor.administrar").global_
+
+
+@transaction.atomic
+def actualizar_cobertura_repartidor(usuario, identificador, datos):
+    from apps.repartidores.cobertura import preparar_cobertura
+    try:
+        repartidor = Repartidor.objects.select_for_update(of=("self",)).select_related("empresa", "pais_operacion").get(pk=identificador)
+    except Repartidor.DoesNotExist as error:
+        raise Http404("El motorista no existe.") from error
+    if not _puede_administrar_repartidor(usuario, repartidor):
+        raise PermissionDenied('No tiene el permiso requerido: "repartidor.administrar".')
+    if settings.MODO_APLICACION == "EXTERNO" and repartidor.empresa_id:
+        raise ValidationError({"empresa_id": "El motorista de Network debe pertenecer a la flota compartida."})
+    cobertura = preparar_cobertura(datos, repartidor.empresa)
+    anterior = {"pais_operacion_id": str(repartidor.pais_operacion_id) if repartidor.pais_operacion_id else None,
+                "departamento_operacion": repartidor.departamento_operacion}
+    nueva = {"pais_operacion_id": str(cobertura["pais_operacion"].pk), "departamento_operacion": cobertura["departamento_operacion"]}
+    if anterior == nueva:
+        raise ValidationError({"departamento_operacion": "La cobertura no contiene cambios."})
+    if contar_solicitudes_activas(repartidor):
+        raise ValidationError({"departamento_operacion": "Debe finalizar o reasignar sus servicios activos antes de cambiar el departamento."})
+    for campo, valor in cobertura.items():
+        setattr(repartidor, campo, valor)
+    repartidor.save(update_fields=(*cobertura.keys(), "actualizado_en"))
+    guardar_cambio_operativo(repartidor, usuario, estado_nuevo=repartidor.estado_operativo, capacidad_nueva=repartidor.capacidad,
+        motivo=datos["motivo"], datos_adicionales={"cobertura_anterior": anterior, "cobertura_nueva": nueva})
+    from apps.solicitudes.servicios import programar_reintento_pendientes
+    programar_reintento_pendientes(repartidor.empresa_id)
+    return repartidor
 
 
 def _exigir_actualizacion_propia(usuario, repartidor, cambios):

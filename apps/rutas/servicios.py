@@ -50,6 +50,8 @@ def sincronizar_ruta(repartidor, motivo, *, jornada=None, cerrar=False, finaliza
         .first()
     )
     if ruta is None and not solicitudes:
+        from apps.seguimiento.desviaciones import cerrar_desviaciones_contexto
+        cerrar_desviaciones_contexto(repartidor, [], cerrar=cerrar, instante=finalizada_en)
         return None
 
     if jornada is None and not cerrar:
@@ -113,6 +115,8 @@ def sincronizar_ruta(repartidor, motivo, *, jornada=None, cerrar=False, finaliza
             for parada in paradas
         ])
 
+    from apps.seguimiento.desviaciones import cerrar_desviaciones_contexto
+    cerrar_desviaciones_contexto(repartidor, paradas, cerrar=cerrar, instante=finalizada_en)
     if cerrar or (not paradas and ruta.jornada_id is None):
         ruta.estado = RutaRepartidor.Estado.FINALIZADA
         ruta.finalizada_en = finalizada_en or timezone.now()

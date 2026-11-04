@@ -1,6 +1,7 @@
 """Settings shared by all VitaGo environments and deployment modes."""
 
 import os
+import math
 from datetime import timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
@@ -76,7 +77,7 @@ CORS_ALLOWED_ORIGINS = env.list("ORIGENES_WEB_PERMITIDOS", default=[])
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOW_CREDENTIALS = False
 CORS_URLS_REGEX = r"^/api/v1/"
-CORS_EXPOSE_HEADERS = ["Retry-After", "Server-Timing"]
+CORS_EXPOSE_HEADERS = ["Retry-After", "Server-Timing", "Content-Disposition"]
 DEFAULT_EXCEPTION_REPORTER_FILTER = "apps.nucleo.seguridad.FiltroInformeErroresSeguro"
 DEFAULT_EXCEPTION_REPORTER = "apps.nucleo.seguridad.InformeErroresSeguro"
 
@@ -116,6 +117,7 @@ INSTALLED_APPS = [
     "apps.jornadas.apps.ConfiguracionJornadas",
     "apps.seguimiento.apps.ConfiguracionSeguimiento",
     "apps.incidencias.apps.ConfiguracionIncidencias",
+    "apps.reportes.apps.ConfiguracionReportes",
 ]
 
 MIDDLEWARE = [
@@ -169,17 +171,41 @@ COBERTURA_GPS_MINIMA_PORCENTAJE = env.float("COBERTURA_GPS_MINIMA_PORCENTAJE", d
 INTERVALO_GPS_CAPTURA_MOVIMIENTO_SEGUNDOS = env.int("INTERVALO_GPS_CAPTURA_MOVIMIENTO_SEGUNDOS", default=5)
 INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS = env.int("INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS", default=15)
 INTERVALO_GPS_ENVIO_SEGUNDOS = env.int("INTERVALO_GPS_ENVIO_SEGUNDOS", default=20)
+try:
+    INTERVALO_GPS_CERCANO_SEGUNDOS = env.int("INTERVALO_GPS_CERCANO_SEGUNDOS", default=5)
+    RADIO_CAPTURA_CERCANA_METROS = env.float("RADIO_CAPTURA_CERCANA_METROS", default=250)
+    RADIO_SALIDA_CAPTURA_CERCANA_METROS = env.float("RADIO_SALIDA_CAPTURA_CERCANA_METROS", default=350)
+except (TypeError, ValueError) as error:
+    raise ImproperlyConfigured(
+        "La captura GPS cercana requiere intervalo entero y radios numéricos finitos."
+    ) from error
 LLEGADAS_AUTOMATICAS_HABILITADAS = env.bool("LLEGADAS_AUTOMATICAS_HABILITADAS", default=True)
 RADIO_LLEGADA_METROS = env.float("RADIO_LLEGADA_METROS", default=50)
 PERMANENCIA_LLEGADA_SEGUNDOS = env.int("PERMANENCIA_LLEGADA_SEGUNDOS", default=10)
 MINIMO_PUNTOS_LLEGADA = env.int("MINIMO_PUNTOS_LLEGADA", default=3)
 PRECISION_LLEGADA_MAXIMA_METROS = env.float("PRECISION_LLEGADA_MAXIMA_METROS", default=20)
 ANTIGUEDAD_LLEGADA_MAXIMA_SEGUNDOS = env.int("ANTIGUEDAD_LLEGADA_MAXIMA_SEGUNDOS", default=30)
+DESVIACIONES_AUTOMATICAS_HABILITADAS = env.bool("DESVIACIONES_AUTOMATICAS_HABILITADAS", default=True)
+DESVIACION_RADIO_METROS = env.float("DESVIACION_RADIO_METROS", default=150)
+DESVIACION_RADIO_REGRESO_METROS = env.float("DESVIACION_RADIO_REGRESO_METROS", default=75)
+DESVIACION_PERMANENCIA_SEGUNDOS = env.int("DESVIACION_PERMANENCIA_SEGUNDOS", default=60)
+DESVIACION_MINIMO_PUNTOS = env.int("DESVIACION_MINIMO_PUNTOS", default=3)
+DESVIACION_PRECISION_MAXIMA_METROS = env.float("DESVIACION_PRECISION_MAXIMA_METROS", default=50)
+DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS = env.int("DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS", default=60)
+for nombre in ("DESVIACION_RADIO_METROS", "DESVIACION_RADIO_REGRESO_METROS", "DESVIACION_PERMANENCIA_SEGUNDOS",
+               "DESVIACION_PRECISION_MAXIMA_METROS", "DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS"):
+    if not math.isfinite(globals()[nombre]) or globals()[nombre] <= 0:
+        raise ImproperlyConfigured(f"{nombre} debe ser un número finito mayor que cero.")
+if not 3 <= DESVIACION_MINIMO_PUNTOS <= 60 or DESVIACION_PERMANENCIA_SEGUNDOS > 300:
+    raise ImproperlyConfigured("Desvíos: use entre 3 y 60 puntos y una permanencia de hasta 300 segundos.")
+if DESVIACION_RADIO_REGRESO_METROS >= DESVIACION_RADIO_METROS:
+    raise ImproperlyConfigured("El radio de regreso debe ser menor al radio de desvío.")
 for nombre in (
     "ANTIGUEDAD_GPS_ASIGNACION_SEGUNDOS", "PRECISION_GPS_ASIGNACION_METROS",
     "INTERVALO_GPS_MAXIMO_SEGUNDOS", "DESPLAZAMIENTO_GPS_MINIMO_METROS",
     "INTERVALO_GPS_CAPTURA_MOVIMIENTO_SEGUNDOS", "INTERVALO_GPS_CAPTURA_DETENIDO_SEGUNDOS",
     "INTERVALO_GPS_ENVIO_SEGUNDOS",
+    "INTERVALO_GPS_CERCANO_SEGUNDOS",
     "RADIO_LLEGADA_METROS", "PERMANENCIA_LLEGADA_SEGUNDOS",
     "PRECISION_LLEGADA_MAXIMA_METROS", "ANTIGUEDAD_LLEGADA_MAXIMA_SEGUNDOS",
 ):
@@ -193,6 +219,16 @@ if not 3 <= MINIMO_PUNTOS_LLEGADA <= 60:
     raise ImproperlyConfigured("MINIMO_PUNTOS_LLEGADA debe estar entre 3 y 60.")
 if PERMANENCIA_LLEGADA_SEGUNDOS > 120:
     raise ImproperlyConfigured("PERMANENCIA_LLEGADA_SEGUNDOS no puede superar la ventana de 120 segundos.")
+if INTERVALO_GPS_CERCANO_SEGUNDOS > INTERVALO_GPS_MAXIMO_SEGUNDOS:
+    raise ImproperlyConfigured("INTERVALO_GPS_CERCANO_SEGUNDOS no puede superar INTERVALO_GPS_MAXIMO_SEGUNDOS.")
+if not (
+    math.isfinite(RADIO_CAPTURA_CERCANA_METROS)
+    and math.isfinite(RADIO_SALIDA_CAPTURA_CERCANA_METROS)
+    and RADIO_LLEGADA_METROS < RADIO_CAPTURA_CERCANA_METROS < RADIO_SALIDA_CAPTURA_CERCANA_METROS
+):
+    raise ImproperlyConfigured(
+        "Los radios deben cumplir: RADIO_LLEGADA_METROS < RADIO_CAPTURA_CERCANA_METROS < RADIO_SALIDA_CAPTURA_CERCANA_METROS, con valores finitos."
+    )
 
 ROOT_URLCONF = "config.urls"
 

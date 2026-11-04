@@ -9,6 +9,8 @@ from apps.repartidores.vistas import (
     VistaResumenesMotoristas,
     VistaResumenMotorista,
     VistaTemperaturasMotorista,
+    VistaDepartamentosRepartidores,
+    VistaCoberturaRepartidor,
 )
 
 app_name = "repartidores"
@@ -16,6 +18,8 @@ app_name = "repartidores"
 urlpatterns = [
     path("", VistaListaCreacionRepartidores.as_view(), name="lista-creacion"),
     path("disponibles/", VistaRepartidoresDisponibles.as_view(), name="disponibles"),
+    path("departamentos/", VistaDepartamentosRepartidores.as_view(), name="departamentos"),
+    path("<uuid:repartidor_id>/cobertura/", VistaCoberturaRepartidor.as_view(), name="cobertura"),
     path("resumenes/", VistaResumenesMotoristas.as_view(), name="resumenes"),
     path("<uuid:repartidor_id>/resumen/", VistaResumenMotorista.as_view(), name="resumen"),
     path("<uuid:repartidor_id>/temperaturas/", VistaTemperaturasMotorista.as_view(), name="temperaturas"),

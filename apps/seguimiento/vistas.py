@@ -54,6 +54,7 @@ class VistaRegistroUbicaciones(APIView):
                 "recibidos": resultado["recibidos"],
                 "creados": resultado["creados"],
                 "repetidos": resultado["repetidos"],
+                "alertas_ruta": resultado.get("alertas_ruta", []),
                 "llegadas_detectadas": SerializadorLlegadaDetectada(
                     resultado["llegadas_detectadas"], many=True,
                 ).data,

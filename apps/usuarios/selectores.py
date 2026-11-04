@@ -91,16 +91,16 @@ def listar_usuarios_autorizados(usuario):
         )
 
     consulta = _consulta_usuarios_segun_alcance(alcances)
-    return consulta.order_by("correo", "id")
+    return consulta.defer("password").order_by("correo", "id")
 
 
 def _consulta_usuarios_segun_alcance(alcances):
     roles_activos = RolUsuario.objetos.filter(
         activo=True,
         rol__activo=True,
-    ).select_related("rol", "empresa", "sucursal")
+    ).select_related("rol")
     consulta = (
-        Usuario.objetos.select_related("empresa", "sucursal")
+        Usuario.objetos.all()
         .prefetch_related(
             Prefetch("asignaciones_roles", queryset=roles_activos)
         )
@@ -125,7 +125,9 @@ def obtener_usuario_autorizado(
             f'No tiene el permiso requerido: "{codigo_permiso}".'
         )
     try:
-        return _consulta_usuarios_segun_alcance(alcances).get(
+        return _consulta_usuarios_segun_alcance(alcances).select_related(
+            "empresa", "sucursal",
+        ).get(
             id=identificador_usuario
         )
     except (Usuario.DoesNotExist, ValueError) as error:
@@ -139,8 +141,19 @@ def listar_asignaciones_roles_usuario_autorizadas(
     identificador_usuario,
 ):
     """Lista el historial de roles visible sin exponer otros alcances."""
-    obtener_usuario_autorizado(usuario, identificador_usuario)
     alcances = obtener_alcances_permiso(usuario, "usuario.ver")
+    if not alcances.tiene_algun_alcance:
+        raise PermissionDenied('No tiene el permiso requerido: "usuario.ver".')
+    try:
+        visible = _consulta_usuarios_segun_alcance(alcances).filter(
+            id=identificador_usuario,
+        ).exists()
+    except ValueError as error:
+        raise Http404(
+            "El usuario no existe o no está dentro de su alcance."
+        ) from error
+    if not visible:
+        raise Http404("El usuario no existe o no está dentro de su alcance.")
     consulta = RolUsuario.objetos.filter(
         usuario_id=identificador_usuario,
     ).select_related(

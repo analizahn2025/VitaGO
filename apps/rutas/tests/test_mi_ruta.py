@@ -46,6 +46,7 @@ class PruebasMiRuta(TestCase):
         cls.empresa = Empresa.objects.create(nombre="Analiza", pais=pais)
         tipo = TipoUbicacion.objects.get(codigo="SUCURSAL")
         cls.origen = Ubicacion.objects.create(
+            nivel_administrativo_1="Francisco Morazán",
             nombre="Sucursal Centro",
             tipo_ubicacion=tipo,
             origen=OrigenUbicacion.REGISTRADA_USUARIO,
@@ -55,6 +56,7 @@ class PruebasMiRuta(TestCase):
             longitud=Decimal("-87.192100"),
         )
         cls.destino = Ubicacion.objects.create(
+            nivel_administrativo_1="Francisco Morazán",
             nombre="Sucursal Norte",
             tipo_ubicacion=tipo,
             origen=OrigenUbicacion.REGISTRADA_USUARIO,
@@ -90,7 +92,7 @@ class PruebasMiRuta(TestCase):
                 asignado_por=cls.administrador,
             )
             cls.motoristas.append(
-                Repartidor.objects.create(usuario=usuario, empresa=cls.empresa)
+                Repartidor.objects.create(pais_operacion=(cls.empresa).pais, departamento_operacion="Francisco Morazán", usuario=usuario, empresa=cls.empresa)
             )
 
     @property
@@ -339,7 +341,7 @@ class PruebasMiRuta(TestCase):
             apellidos="Permiso",
             empresa=self.empresa,
         )
-        Repartidor.objects.create(usuario=usuario, empresa=self.empresa)
+        Repartidor.objects.create(pais_operacion=(self.empresa).pais, departamento_operacion="Francisco Morazán", usuario=usuario, empresa=self.empresa)
         respuesta = self._cliente(usuario).get(reverse("rutas:mi-ruta"))
         self.assertEqual(respuesta.status_code, 403)
 

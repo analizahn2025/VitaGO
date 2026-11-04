@@ -5,9 +5,7 @@ from apps.notificaciones.vigencia import limites_dia_operativo, notificaciones_v
 
 
 def listar_notificaciones(usuario):
-    return notificaciones_vigentes().filter(usuario=usuario).select_related(
-        "solicitud"
-    )
+    return notificaciones_vigentes().filter(usuario=usuario)
 
 
 def contar_no_leidas(usuario):

@@ -1,0 +1,42 @@
+name: vitago-pruebas
+
+services:
+  pruebas:
+    image: vitago-backend:pruebas
+    build:
+      context: .
+      dockerfile: Dockerfile
+    entrypoint: [python, -m, scripts.docker.ejecutar_pruebas]
+    command: []
+    environment:
+      DJANGO_SETTINGS_MODULE: config.settings.pruebas_postgresql
+      URL_BASE_DATOS_PRUEBAS: postgresql://vitago_pruebas:solo-pruebas-aisladas@bd_pruebas:5432/vitago_pruebas_docker
+      URL_BASE_DATOS: postgresql://vitago_pruebas:solo-pruebas-aisladas@bd_pruebas:5432/vitago_pruebas_docker
+      NOMBRE_BASE_DATOS: ""
+      MODO_APLICACION: CORPORATIVO
+      PROVEEDOR_AUTENTICACION: LOCAL
+      HABILITAR_RECUPERACION_CIERRE: "false"
+      HABILITAR_MANTENIMIENTO_IMAGENES: "false"
+    depends_on:
+      bd_pruebas:
+        condition: service_healthy
+    networks: [red_pruebas]
+    healthcheck:
+      disable: true
+  bd_pruebas:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: vitago_pruebas_docker
+      POSTGRES_USER: vitago_pruebas
+      POSTGRES_PASSWORD: solo-pruebas-aisladas
+    tmpfs: ["/var/lib/postgresql/data:rw,size=1g"]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"']
+      interval: 2s
+      timeout: 3s
+      retries: 20
+    networks: [red_pruebas]
+
+networks:
+  red_pruebas:
+    internal: true

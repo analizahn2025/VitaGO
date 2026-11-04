@@ -8,6 +8,7 @@ from rest_framework.exceptions import PermissionDenied
 from apps.jornadas.opciones import EstadoJornada
 from apps.jornadas.models import JornadaRepartidor
 from apps.seguimiento.models import RegistroUbicacion
+from apps.seguimiento.captura import configuracion_captura_cercana
 from apps.seguimiento.vigencia import posiciones_vigentes
 from apps.repartidores.models import Repartidor
 from apps.solicitudes.models import AsignacionSolicitud
@@ -103,12 +104,24 @@ def obtener_configuracion_gps(usuario):
             "antiguedad_maxima_segundos": settings.ANTIGUEDAD_LLEGADA_MAXIMA_SEGUNDOS,
             "solo_proxima_parada": True,
             "destino_especial_sin_coordenadas_manual": True,
+            "captura_cercana": configuracion_captura_cercana(),
+        },
+        "desviacion_ruta": {
+            "habilitada": settings.DESVIACIONES_AUTOMATICAS_HABILITADAS,
+            "radio_metros": settings.DESVIACION_RADIO_METROS,
+            "radio_regreso_metros": settings.DESVIACION_RADIO_REGRESO_METROS,
+            "permanencia_minima_segundos": settings.DESVIACION_PERMANENCIA_SEGUNDOS,
+            "minimo_puntos": settings.DESVIACION_MINIMO_PUNTOS,
+            "precision_maxima_metros": settings.DESVIACION_PRECISION_MAXIMA_METROS,
+            "antiguedad_maxima_segundos": settings.DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS,
+            "requiere_ruta_vial_vigente": True,
+            "solo_proxima_parada": True,
         },
     }
 
 
 def obtener_seguimiento_solicitud(usuario, solicitud_id):
-    solicitud = obtener_solicitud_autorizada(usuario, solicitud_id)
+    solicitud = obtener_solicitud_autorizada(usuario, solicitud_id, incluir_historial=False)
     if not usuario_tiene_permiso(
         usuario, "solicitud.ver_seguimiento",
         empresa=solicitud.empresa, sucursal=solicitud.sucursal,

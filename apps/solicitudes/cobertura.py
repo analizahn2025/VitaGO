@@ -1,11 +1,10 @@
 """Cobertura administrativa corporativa; no representa distancia ni una ruta vial."""
 
-from unicodedata import normalize
+from apps.geografia.normalizacion import clave_departamento
 
 
 def departamento_normalizado(ubicacion):
-    texto = normalize("NFC", ubicacion.nivel_administrativo_1 or "")
-    return " ".join(texto.split()).casefold()
+    return clave_departamento(ubicacion.nivel_administrativo_1)
 
 
 def comparten_departamento(origen, destino):

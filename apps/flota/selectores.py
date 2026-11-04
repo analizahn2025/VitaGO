@@ -19,9 +19,7 @@ def listar_vehiculos_autorizados(usuario, filtros=None):
     if not alcances.tiene_algun_alcance:
         raise PermissionDenied('No tiene el permiso requerido: "vehiculo.ver".')
 
-    consulta = Vehiculo.objects.select_related("empresa").filter(
-        _filtro_alcances(alcances)
-    )
+    consulta = Vehiculo.objects.filter(_filtro_alcances(alcances))
     filtros = filtros or {}
     if filtros.get("empresa_id"):
         consulta = consulta.filter(empresa_id=filtros["empresa_id"])

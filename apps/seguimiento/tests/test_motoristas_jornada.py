@@ -57,7 +57,7 @@ class PruebasMotoristasEnJornada(TestCase):
 
     def _otro_motorista(self, empresa, indice):
         usuario = Usuario.objetos.create(correo=f"motorista-{indice}@seguimiento.test", nombres=f"Otro {indice}", apellidos="Motorista", empresa=empresa)
-        repartidor = Repartidor.objects.create(usuario=usuario, empresa=empresa, estado_operativo="AVAILABLE")
+        repartidor = Repartidor.objects.create(pais_operacion=(empresa).pais if empresa is not None else self.pais, departamento_operacion="Francisco Morazán", usuario=usuario, empresa=empresa, estado_operativo="AVAILABLE")
         jornada = JornadaRepartidor.objects.create(repartidor=repartidor, iniciada_en=self.ahora - timedelta(minutes=10))
         return repartidor, jornada
 

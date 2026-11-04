@@ -226,7 +226,7 @@ class PruebasResumenesMotoristas(TestCase):
     def test_administrador_empresa_no_ve_motoristas_de_otra(self):
         otra = Empresa.objects.create(nombre="Otra", pais=self.empresa.pais)
         u = Usuario.objetos.create(correo="otro@example.test", nombres="Otro", apellidos="Motorista", empresa=otra)
-        r = Repartidor.objects.create(usuario=u, empresa=otra)
+        r = Repartidor.objects.create(pais_operacion=(otra).pais, departamento_operacion="Francisco Morazán", usuario=u, empresa=otra)
         self.cliente.force_authenticate(self._lector())
         self.assertEqual(self._lista().data["conteo"], 2)
         self.assertEqual(self._consultar(r).status_code, 404)
@@ -250,7 +250,7 @@ class PruebasResumenesMotoristas(TestCase):
     @override_settings(MODO_APLICACION="EXTERNO", TIME_ZONE="America/Tegucigalpa")
     def test_cliente_network_no_ve_resumen_global_de_otras_empresas(self):
         u = Usuario.objetos.create(correo="global@example.test", nombres="Red", apellidos="Global")
-        r = Repartidor.objects.create(usuario=u)
+        r = Repartidor.objects.create(pais_operacion=self.pais, departamento_operacion="Francisco Morazán", usuario=u)
         self.cliente.force_authenticate(self._lector())
         self.assertEqual(self._consultar(r).status_code, 404)
         self.cliente.force_authenticate(self.administrador)
@@ -293,7 +293,7 @@ class PruebasResumenesMotoristas(TestCase):
             self.assertEqual(self._lista().status_code, 200)
         for n in range(3):
             u = Usuario.objetos.create(correo=f"extra{n}@example.test", nombres="Extra", apellidos=str(n), empresa=self.empresa)
-            Repartidor.objects.create(usuario=u, empresa=self.empresa)
+            Repartidor.objects.create(pais_operacion=(self.empresa).pais, departamento_operacion="Francisco Morazán", usuario=u, empresa=self.empresa)
         with CaptureQueriesContext(connection) as varias:
             self.assertEqual(self._lista().data["conteo"], 5)
         self.assertEqual(len(pocas), len(varias))

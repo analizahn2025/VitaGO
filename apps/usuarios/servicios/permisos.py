@@ -43,16 +43,19 @@ def _obtener_identificador(valor):
     return getattr(valor, "pk", valor)
 
 
-def obtener_alcances_permiso(usuario, codigo_permiso):
-    """Agrupa los alcances activos de un permiso sin exponer otros datos."""
+def obtener_alcances_permisos(usuario, codigos_permisos):
+    """Lee varios permisos en una consulta, sin conservar autorizaciones en caché."""
+    codigos = tuple(dict.fromkeys(codigo.strip().casefold() for codigo in codigos_permisos))
+    vacios = {codigo: AlcancesPermiso() for codigo in codigos}
+    if not codigos:
+        return vacios
     if not usuario or not getattr(usuario, "is_authenticated", False):
-        return AlcancesPermiso()
+        return vacios
     if not usuario.is_active:
-        return AlcancesPermiso()
+        return vacios
     if usuario.es_superusuario:
-        return AlcancesPermiso(global_=True)
+        return {codigo: AlcancesPermiso(global_=True) for codigo in codigos}
 
-    codigo_normalizado = codigo_permiso.strip().casefold()
     asignaciones = (
         RolUsuario.objetos.filter(
             usuario_id=usuario.pk,
@@ -60,9 +63,11 @@ def obtener_alcances_permiso(usuario, codigo_permiso):
             rol__activo=True,
             rol__asignaciones_permisos__activo=True,
             rol__asignaciones_permisos__permiso__activo=True,
-            rol__asignaciones_permisos__permiso__codigo=codigo_normalizado,
+            rol__asignaciones_permisos__permiso__codigo__in=codigos,
         )
+        .order_by()
         .values_list(
+            "rol__asignaciones_permisos__permiso__codigo",
             "tipo_alcance",
             "empresa_id",
             "sucursal_id",
@@ -70,26 +75,28 @@ def obtener_alcances_permiso(usuario, codigo_permiso):
         .distinct()
     )
 
-    global_ = False
-    empresas = set()
-    sucursales = set()
-    empresas_de_sucursales = set()
-    for tipo_alcance, empresa_id, sucursal_id in asignaciones:
+    grupos = {codigo: {"global_": False, "empresas": set(), "sucursales": set(), "empresas_de_sucursales": set()}
+              for codigo in codigos}
+    for codigo, tipo_alcance, empresa_id, sucursal_id in asignaciones:
+        grupo = grupos[codigo]
         if tipo_alcance == TipoAlcanceRol.GLOBAL:
-            global_ = True
+            grupo["global_"] = True
         elif tipo_alcance == TipoAlcanceRol.EMPRESA and empresa_id:
-            empresas.add(empresa_id)
+            grupo["empresas"].add(empresa_id)
         elif tipo_alcance == TipoAlcanceRol.SUCURSAL and sucursal_id:
-            sucursales.add(sucursal_id)
+            grupo["sucursales"].add(sucursal_id)
             if empresa_id:
-                empresas_de_sucursales.add(empresa_id)
+                grupo["empresas_de_sucursales"].add(empresa_id)
 
-    return AlcancesPermiso(
-        global_=global_,
-        empresas=frozenset(empresas),
-        sucursales=frozenset(sucursales),
-        empresas_de_sucursales=frozenset(empresas_de_sucursales),
-    )
+    return {codigo: AlcancesPermiso(global_=grupo["global_"], empresas=frozenset(grupo["empresas"]),
+        sucursales=frozenset(grupo["sucursales"]), empresas_de_sucursales=frozenset(grupo["empresas_de_sucursales"]))
+        for codigo, grupo in grupos.items()}
+
+
+def obtener_alcances_permiso(usuario, codigo_permiso):
+    """Conserva la consulta individual mediante la misma regla de agrupación."""
+    codigo = codigo_permiso.strip().casefold()
+    return obtener_alcances_permisos(usuario, (codigo,))[codigo]
 
 
 def usuario_tiene_permiso(

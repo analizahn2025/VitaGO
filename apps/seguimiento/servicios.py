@@ -158,6 +158,7 @@ def registrar_ubicaciones(usuario, datos_validados):
     nuevos_datos = [
         datos for datos in registros if datos["id_cliente"] not in existentes
     ]
+    identificadores_nuevos = {datos["id_cliente"] for datos in nuevos_datos}
     sesiones = {datos["sesion_gps"] for datos in nuevos_datos if datos.get("sesion_gps")}
     if sesiones and RegistroUbicacion.objects.filter(
         repartidor=repartidor, sesion_gps__in=sesiones,
@@ -173,7 +174,7 @@ def registrar_ubicaciones(usuario, datos_validados):
     errores = {
         indice: {"secuencia": "Ya existe esta secuencia GPS con otro id_cliente."}
         for indice, datos in enumerate(registros)
-        if datos in nuevos_datos and (datos.get("sesion_gps"), datos.get("secuencia")) in existentes_secuencia
+        if datos["id_cliente"] in identificadores_nuevos and (datos.get("sesion_gps"), datos.get("secuencia")) in existentes_secuencia
     }
     if errores:
         raise ValidationError({"registros": errores})
@@ -213,7 +214,7 @@ def registrar_ubicaciones(usuario, datos_validados):
 
         revisar_mediciones_pendientes(jornada)
         if posiciones_vigentes().filter(repartidor=repartidor).exists():
-            programar_reintento_pendientes(repartidor.empresa_id)
+            programar_reintento_pendientes(repartidor.empresa_id, verificar_disponibilidad=True)
 
     guardados = {
         registro.id_cliente: registro
@@ -237,4 +238,6 @@ def registrar_ubicaciones(usuario, datos_validados):
     from apps.solicitudes.flujo_automatico import programar_avance_automatico
     programar_avance_automatico(repartidor.pk)
     programar_deteccion_llegada(usuario, repartidor.id, jornada.id, resultado)
+    from apps.seguimiento.desviaciones import programar_deteccion_desviacion
+    programar_deteccion_desviacion(usuario, repartidor.id, jornada.id, resultado)
     return resultado

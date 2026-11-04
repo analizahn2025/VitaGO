@@ -5,10 +5,12 @@ from apps.repartidores.models import HistorialEstadoRepartidor, Repartidor
 
 @admin.register(Repartidor)
 class AdministracionRepartidor(admin.ModelAdmin):
+    readonly_fields = ("pais_operacion", "departamento_operacion", "departamento_operacion_clave")
     exclude = ("limite_tubos",)
     list_display = (
         "usuario",
         "empresa",
+        "departamento_operacion",
         "vehiculo",
         "estado_operativo",
         "capacidad",

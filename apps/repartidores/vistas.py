@@ -24,7 +24,10 @@ from apps.repartidores.serializadores import (
 from apps.repartidores.servicios import (
     actualizar_operacion_repartidor,
     crear_repartidor,
+    actualizar_cobertura_repartidor,
 )
+from apps.repartidores.cobertura import opciones_departamentos
+from apps.repartidores.serializadores import SerializadorCoberturaRepartidor, SerializadorConsultaDisponibles, SerializadorConsultaDepartamentos
 from apps.repartidores.resumenes import (
     construir_resumenes, lecturas_temperatura, listar_motoristas_para_resumen,
     obtener_motorista_para_resumen, periodo_operativo,
@@ -105,12 +108,31 @@ class VistaRepartidoresDisponibles(APIView):
     permission_classes = (IsAuthenticated,)
 
     def get(self, request):
-        entrada = SerializadorConsultaRepartidores(data=request.query_params.dict())
+        entrada = SerializadorConsultaDisponibles(data=request.query_params.dict())
         entrada.is_valid(raise_exception=True)
         consulta = listar_repartidores_disponibles(
             request.user, entrada.validated_data
         )
         return _respuesta_paginada(request, self, consulta)
+
+
+class VistaDepartamentosRepartidores(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def get(self, request):
+        entrada = SerializadorConsultaDepartamentos(data=request.query_params.dict())
+        entrada.is_valid(raise_exception=True)
+        return Response(opciones_departamentos(request.user, entrada.validated_data))
+
+
+class VistaCoberturaRepartidor(APIView):
+    permission_classes = (IsAuthenticated,)
+
+    def patch(self, request, repartidor_id):
+        entrada = SerializadorCoberturaRepartidor(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        repartidor = actualizar_cobertura_repartidor(request.user, repartidor_id, entrada.validated_data)
+        return Response(SerializadorRepartidor(repartidor).data)
 
 
 class VistaMiPerfilRepartidor(APIView):

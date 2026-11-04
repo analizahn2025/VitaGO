@@ -221,8 +221,9 @@ def registrar_evidencia_incidencia(usuario, incidencia_id, datos_validados):
     datos = dict(datos_validados)
     archivo = datos.pop("archivo")
     tipo_contenido, extension = validar_archivo_imagen(archivo)
+    imagen_preparada = preparar_imagen_base64(archivo, timezone.now())
     with transaction.atomic():
-        autorizada = obtener_incidencia_autorizada(usuario, incidencia_id)
+        autorizada = obtener_incidencia_autorizada(usuario, incidencia_id, incluir_eventos=False)
         incidencia = (
             Incidencia.objects.select_for_update(of=("self",))
             .select_related(
@@ -234,6 +235,10 @@ def registrar_evidencia_incidencia(usuario, incidencia_id, datos_validados):
         )
         _validar_propiedad_evidencia(usuario, incidencia)
         datos["capturada_en"] = timezone.now()
+        imagen_preparada.update(
+            imagen_guardada_en=datos["capturada_en"],
+            archivo_original_eliminado_en=datos["capturada_en"],
+        )
 
         clave_propuesta = (
             f"bd/incidencias/{incidencia.id}/{uuid.uuid4().hex}.{extension}"
@@ -242,7 +247,7 @@ def registrar_evidencia_incidencia(usuario, incidencia_id, datos_validados):
             incidencia=incidencia,
             repartidor=incidencia.repartidor,
             clave_almacenamiento=clave_propuesta,
-            **preparar_imagen_base64(archivo, datos["capturada_en"]),
+            **imagen_preparada,
             tipo_contenido=tipo_contenido,
             tamano_bytes=archivo.size,
             **datos,

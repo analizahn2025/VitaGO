@@ -6,6 +6,25 @@ from apps.seguimiento.models import RegistroUbicacion, RevisionKilometraje
 from apps.repartidores.opciones import EstadoOperativoRepartidor
 
 
+class SerializadorObjetivoCapturaCercana(serializers.Serializer):
+    solicitud_id = serializers.UUIDField()
+    tipo_parada = serializers.ChoiceField(choices=("RECOLECCION", "ENTREGA"))
+    ubicacion_id = serializers.UUIDField()
+    latitud = serializers.DecimalField(max_digits=9, decimal_places=6)
+    longitud = serializers.DecimalField(max_digits=9, decimal_places=6)
+
+
+class SerializadorCapturaCercana(serializers.Serializer):
+    habilitada = serializers.BooleanField()
+    radio_activacion_metros = serializers.FloatField()
+    radio_desactivacion_metros = serializers.FloatField()
+    intervalo_captura_segundos = serializers.IntegerField()
+    intervalo_envio_segundos = serializers.IntegerField()
+    enviar_al_entrar = serializers.BooleanField()
+    aplica_detenido = serializers.BooleanField()
+    objetivo = SerializadorObjetivoCapturaCercana(allow_null=True)
+
+
 class SerializadorConsultaMotoristasSeguimiento(serializers.Serializer):
     empresa_id = serializers.UUIDField(required=False)
     repartidor_id = serializers.UUIDField(required=False)

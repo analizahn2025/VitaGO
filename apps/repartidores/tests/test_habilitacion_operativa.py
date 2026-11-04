@@ -217,7 +217,8 @@ class PruebasHabilitacionOperativa(TestCase):
         usuario = Usuario.objetos.create(correo="nuevo.red@prueba.test", nombres="Nuevo", apellidos="Red")
         RolUsuario.objetos.create(usuario=usuario, rol=Rol.objetos.get(codigo="REPARTIDOR_RED"), tipo_alcance="GLOBAL")
         vehiculo = Vehiculo.objects.create(placa="RED-NUEVO", tipo="MOTOCICLETA")
-        perfil = crear_repartidor(self.administrador, {"usuario_id": usuario.pk, "vehiculo_id": vehiculo.pk})
+        perfil = crear_repartidor(self.administrador, {"usuario_id": usuario.pk, "vehiculo_id": vehiculo.pk,
+            "pais_operacion_id": self.pais.pk, "departamento_operacion": "Francisco Morazán"})
         self.assertIsNone(perfil.empresa_id)
         perfil.estado_operativo = "AVAILABLE"
         perfil.save()

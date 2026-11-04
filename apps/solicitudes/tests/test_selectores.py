@@ -18,20 +18,20 @@ class PruebasSelectoresSolicitudes(SimpleTestCase):
         )
 
     @patch("apps.solicitudes.selectores._consulta_base_solicitudes")
-    @patch("apps.solicitudes.selectores.obtener_alcances_permiso")
+    @patch("apps.solicitudes.selectores.obtener_alcances_permisos")
     def test_permiso_global_no_restringe_el_listado(
         self,
         obtener_alcances,
         consulta_base,
     ):
-        obtener_alcances.side_effect = [
-            AlcancesPermiso(global_=True),
-            AlcancesPermiso(),
-            AlcancesPermiso(),
-        ]
+        obtener_alcances.return_value = {
+            "solicitud.ver": AlcancesPermiso(global_=True),
+            "solicitud.ver_propias": AlcancesPermiso(),
+            "solicitud.ver_asignadas": AlcancesPermiso(),
+        }
         consulta = MagicMock()
         consulta_base.return_value = consulta
-        consulta.filter.return_value.distinct.return_value.order_by.return_value = (
+        consulta.filter.return_value.order_by.return_value = (
             "consulta-global"
         )
 
@@ -40,22 +40,23 @@ class PruebasSelectoresSolicitudes(SimpleTestCase):
         filtro = consulta.filter.call_args.args[0]
         self.assertFalse(filtro.children)
         self.assertEqual(resultado, "consulta-global")
+        obtener_alcances.assert_called_once()
 
     @patch("apps.solicitudes.selectores._consulta_base_solicitudes")
-    @patch("apps.solicitudes.selectores.obtener_alcances_permiso")
+    @patch("apps.solicitudes.selectores.obtener_alcances_permisos")
     def test_solicitante_global_solo_consulta_sus_propias_solicitudes(
         self,
         obtener_alcances,
         consulta_base,
     ):
-        obtener_alcances.side_effect = [
-            AlcancesPermiso(),
-            AlcancesPermiso(global_=True),
-            AlcancesPermiso(),
-        ]
+        obtener_alcances.return_value = {
+            "solicitud.ver": AlcancesPermiso(),
+            "solicitud.ver_propias": AlcancesPermiso(global_=True),
+            "solicitud.ver_asignadas": AlcancesPermiso(),
+        }
         consulta = MagicMock()
         consulta_base.return_value = consulta
-        consulta.filter.return_value.distinct.return_value.order_by.return_value = (
+        consulta.filter.return_value.order_by.return_value = (
             "consulta-propia"
         )
 
@@ -65,3 +66,4 @@ class PruebasSelectoresSolicitudes(SimpleTestCase):
         self.assertIn("solicitada_por_id", str(filtro))
         self.assertIn(str(self.usuario.pk), str(filtro))
         self.assertEqual(resultado, "consulta-propia")
+        obtener_alcances.assert_called_once()

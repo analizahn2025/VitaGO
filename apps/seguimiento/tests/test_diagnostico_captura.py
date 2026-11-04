@@ -128,6 +128,7 @@ class PruebasDiagnosticoCaptura(TestCase):
             empresa=self.empresa,
         )
         otro_repartidor = Repartidor.objects.create(
+            pais_operacion=(self.empresa).pais, departamento_operacion="Francisco Morazán",
             usuario=otro_usuario, empresa=self.empresa
         )
         otra_jornada = JornadaRepartidor.objects.create(

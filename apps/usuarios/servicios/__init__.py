@@ -8,6 +8,7 @@ from apps.usuarios.servicios.administracion import (
 )
 from apps.usuarios.servicios.permisos import (
     obtener_alcances_permiso,
+    obtener_alcances_permisos,
     usuario_tiene_permiso,
 )
 
@@ -17,6 +18,7 @@ __all__ = [
     "asignar_rol_usuario",
     "listar_roles_asignables",
     "obtener_alcances_permiso",
+    "obtener_alcances_permisos",
     "usuario_tiene_permiso",
     "restablecer_contrasena_usuario",
     "revocar_rol_usuario",

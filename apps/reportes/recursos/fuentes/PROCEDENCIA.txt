@@ -1,0 +1,13 @@
+Fuentes Unicode de respaldo para los reportes de VitaGo.
+Versiones estaticas de peso 400 generadas con FontTools 4.68.0.
+No se descargan ni transforman fuentes durante solicitudes HTTP.
+
+NotoSansSC-Regular.ttf
+Origen: https://raw.githubusercontent.com/google/fonts/main/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf
+SHA256 original: a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da
+SHA256 incorporado: 9b3e57b8f428999e3ee34fd28e719d195760244367a72ef9f4e85055f7aa3b46
+
+NotoEmoji-Regular.ttf
+Origen: https://raw.githubusercontent.com/google/fonts/main/ofl/notoemoji/NotoEmoji%5Bwght%5D.ttf
+SHA256 original: de6c18832938afc99caf132b39d6a30a19bac7f2e812e28db2535b4608d27551
+SHA256 incorporado: 391493ec3114993bc50684f603c8d6f73c0655b112cdf732dd944416b4a17fa4

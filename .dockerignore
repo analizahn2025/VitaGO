@@ -1,0 +1,22 @@
+# Lista permitida: nunca enviar secretos, datos, adjuntos ni el repositorio al motor.
+**
+!Dockerfile
+!.dockerignore
+!docker-entrypoint.sh
+!manage.py
+!gunicorn.conf.py
+!requirements/
+!requirements/**
+!apps/
+!apps/**
+!config/
+!config/**
+!scripts/
+!scripts/docker/
+!scripts/docker/**
+**/__pycache__/
+**/*.py[cod]
+**/.env
+**/.env.*
+**/*.pem
+**/*.key

@@ -2,6 +2,7 @@ from django.db import models
 
 
 class TipoNotificacion(models.TextChoices):
+    DESVIACION_RUTA = "DESVIACION_RUTA", "Desvío de ruta"
     REASIGNACION_PENDIENTE = "REASIGNACION_PENDIENTE", "Reasignación pendiente"
     SERVICIO_NO_ENTREGADO = "SERVICIO_NO_ENTREGADO", "Servicio no entregado"
     SOLICITUD_ASIGNADA = "SOLICITUD_ASIGNADA", "Solicitud asignada"

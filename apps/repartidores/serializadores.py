@@ -61,6 +61,7 @@ class SerializadorLecturaTemperaturaResumen(serializers.ModelSerializer):
 
 
 class SerializadorRepartidor(serializers.ModelSerializer):
+    cobertura_configurada = serializers.BooleanField(read_only=True)
     en_almuerzo = serializers.SerializerMethodField()
     almuerzo_iniciado_en = serializers.SerializerMethodField()
     usuario = SerializadorUsuarioPerfil(read_only=True)
@@ -173,6 +174,7 @@ class SerializadorRepartidor(serializers.ModelSerializer):
             "id",
             "usuario",
             "empresa_id",
+            "pais_operacion_id", "departamento_operacion", "cobertura_configurada",
             "vehiculo",
             "estado_operativo",
             "en_almuerzo", "almuerzo_iniciado_en",
@@ -191,12 +193,17 @@ class SerializadorRepartidor(serializers.ModelSerializer):
 
 
 class SerializadorCreacionRepartidor(serializers.Serializer):
+    pais_operacion_id = serializers.UUIDField(required=False)
+    departamento_operacion = serializers.CharField(max_length=150, required=False)
     usuario_id = serializers.UUIDField()
     empresa_id = serializers.UUIDField(required=False, allow_null=True)
     vehiculo_id = serializers.UUIDField(required=False, allow_null=True)
 
 
 class SerializadorConsultaRepartidores(serializers.Serializer):
+    pais_operacion_id = serializers.UUIDField(required=False)
+    departamento_operacion = serializers.CharField(max_length=150, required=False)
+    cobertura_configurada = serializers.BooleanField(required=False)
     en_almuerzo = serializers.BooleanField(required=False)
     cantidad_tubos = serializers.IntegerField(min_value=0, max_value=2147483647, required=False)
     cantidad_frascos = serializers.IntegerField(min_value=0, max_value=2147483647, required=False)
@@ -208,6 +215,27 @@ class SerializadorConsultaRepartidores(serializers.Serializer):
         choices=CapacidadRepartidor.choices, required=False
     )
     activo = serializers.BooleanField(required=False)
+
+
+class SerializadorConsultaDisponibles(SerializadorConsultaRepartidores):
+    solicitud_id = serializers.UUIDField(required=False)
+
+
+class SerializadorCoberturaRepartidor(serializers.Serializer):
+    pais_operacion_id = serializers.UUIDField(required=False)
+    departamento_operacion = serializers.CharField(max_length=150)
+    motivo = serializers.CharField(max_length=1000)
+
+    def validate(self, atributos):
+        desconocidos = set(self.initial_data) - set(self.fields)
+        if desconocidos:
+            raise serializers.ValidationError({campo: "Campo no permitido." for campo in sorted(desconocidos)})
+        return atributos
+
+
+class SerializadorConsultaDepartamentos(serializers.Serializer):
+    empresa_id = serializers.UUIDField(required=False)
+    pais_operacion_id = serializers.UUIDField(required=False)
 
 
 class SerializadorActualizacionOperacionRepartidor(serializers.Serializer):

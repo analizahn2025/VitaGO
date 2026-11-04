@@ -7,7 +7,7 @@ from rest_framework.exceptions import PermissionDenied
 from apps.jornadas.models import JornadaRepartidor
 from apps.jornadas.opciones import EstadoJornada
 from apps.repartidores.models import Repartidor
-from apps.usuarios.servicios import obtener_alcances_permiso
+from apps.usuarios.servicios import obtener_alcances_permiso, obtener_alcances_permisos
 
 
 def estado_jornada_propia(usuario):
@@ -18,8 +18,7 @@ def estado_jornada_propia(usuario):
     from apps.flota.opciones import EstadoVehiculo, TipoVehiculo
     from apps.usuarios.servicios import usuario_tiene_permiso
 
-    jornada = obtener_jornada_activa_propia(usuario)
-    repartidor = _obtener_repartidor_propio(usuario)
+    repartidor, jornada = _consultar_jornada_activa_propia(usuario)
     ahora = timezone.now()
     fecha, inicio, corte = periodo_operativo(ahora, repartidor.empresa)
     inicio_hoy = JornadaRepartidor.objects.filter(repartidor=repartidor).filter(
@@ -48,10 +47,8 @@ def estado_jornada_propia(usuario):
 def _consulta_base():
     return JornadaRepartidor.objects.select_related(
         "repartidor",
-        "repartidor__usuario",
         "repartidor__empresa",
         "repartidor__empresa__pais",
-        "repartidor__vehiculo",
     ).prefetch_related("almuerzos")
 
 
@@ -60,6 +57,7 @@ def _obtener_repartidor_propio(usuario):
         return Repartidor.objects.select_related(
             "usuario",
             "empresa",
+            "empresa__pais",
             "vehiculo",
         ).get(usuario=usuario, activo=True)
     except Repartidor.DoesNotExist as error:
@@ -67,16 +65,14 @@ def _obtener_repartidor_propio(usuario):
 
 
 def listar_jornadas_autorizadas(usuario, filtros=None):
-    alcances = obtener_alcances_permiso(usuario, "jornada.ver")
+    permisos = obtener_alcances_permisos(usuario, ("jornada.ver", "repartidor.administrar"))
+    alcances = permisos["jornada.ver"]
     if not alcances.tiene_algun_alcance:
         raise PermissionDenied(
             'No tiene el permiso requerido: "jornada.ver".'
         )
 
-    alcances_administracion = obtener_alcances_permiso(
-        usuario,
-        "repartidor.administrar",
-    )
+    alcances_administracion = permisos["repartidor.administrar"]
     consulta = _consulta_base()
     if alcances_administracion.tiene_algun_alcance:
         if not alcances_administracion.global_:
@@ -111,15 +107,20 @@ def obtener_jornada_autorizada(usuario, jornada_id):
 
 
 def obtener_jornada_activa_propia(usuario):
+    return _consultar_jornada_activa_propia(usuario)[1]
+
+
+def _consultar_jornada_activa_propia(usuario):
     alcances = obtener_alcances_permiso(usuario, "jornada.ver")
     if not alcances.tiene_algun_alcance:
         raise PermissionDenied(
             'No tiene el permiso requerido: "jornada.ver".'
         )
     repartidor = _obtener_repartidor_propio(usuario)
-    return (
+    jornada = (
         _consulta_base()
         .filter(repartidor=repartidor, estado=EstadoJornada.ACTIVA)
         .first()
     )
+    return repartidor, jornada
 

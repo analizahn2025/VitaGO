@@ -55,6 +55,19 @@ print(json.dumps(resultado))
 
 
 class PruebasConfiguracionDespliegue(SimpleTestCase):
+    def test_captura_cercana_rechaza_intervalos_y_radios_invalidos(self):
+        for cambios in (
+            {"INTERVALO_GPS_CERCANO_SEGUNDOS": "texto"},
+            {"INTERVALO_GPS_CERCANO_SEGUNDOS": "0"},
+            {"INTERVALO_GPS_CERCANO_SEGUNDOS": "31"},
+            {"RADIO_CAPTURA_CERCANA_METROS": "nan"},
+            {"RADIO_CAPTURA_CERCANA_METROS": "inf"},
+            {"RADIO_CAPTURA_CERCANA_METROS": "50"},
+            {"RADIO_SALIDA_CAPTURA_CERCANA_METROS": "250"},
+        ):
+            with self.subTest(cambios=cambios):
+                self.assertIn("error", self.comprobar(**cambios))
+
     def comprobar(self, *, wsgi=False, **cambios):
         # No heredar URL_BASE_DATOS, secretos ni .env del proceso de pruebas.
         entorno = {

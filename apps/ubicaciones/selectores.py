@@ -40,7 +40,6 @@ def listar_ubicaciones_autorizadas(usuario, identificador_empresa):
     relaciones = (
         UbicacionEmpresa.objects.filter(empresa_id=empresa.id)
         .select_related(
-            "empresa",
             "ubicacion",
             "ubicacion__tipo_ubicacion",
             "ubicacion__pais",

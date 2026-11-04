@@ -7,7 +7,7 @@ from apps.usuarios.servicios import usuario_tiene_permiso
 
 
 def _obtener_solicitud_con_permiso_evidencias(usuario, solicitud_id):
-    solicitud = obtener_solicitud_autorizada(usuario, solicitud_id)
+    solicitud = obtener_solicitud_autorizada(usuario, solicitud_id, incluir_historial=False)
     if not usuario_tiene_permiso(
         usuario,
         "evidencia.ver",
@@ -27,8 +27,6 @@ def listar_evidencias_autorizadas(usuario, solicitud_id):
     )
     return EvidenciaSolicitud.objects.filter(solicitud=solicitud).select_related(
         "solicitud",
-        "repartidor",
-        "repartidor__usuario",
     )
 
 

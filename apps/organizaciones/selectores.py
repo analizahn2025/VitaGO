@@ -43,10 +43,8 @@ def obtener_empresa_autorizada(usuario, identificador_empresa):
 
 def _consulta_sucursales_segun_alcance(alcances):
     consulta = Sucursal.objects.select_related(
-        "empresa",
         "ubicacion",
         "ubicacion__tipo_ubicacion",
-        "ubicacion__pais",
     ).order_by("nombre", "id")
     if alcances.global_:
         return consulta

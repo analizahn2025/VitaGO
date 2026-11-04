@@ -1,16 +1,21 @@
 """Carreras operativas reales, exclusivamente en PostgreSQL de pruebas."""
 
 import uuid
+import base64
+from io import BytesIO
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from decimal import Decimal
 from threading import Barrier, Event
+from unittest.mock import patch
 
 from django.db import connection, connections, transaction
+from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TransactionTestCase, override_settings, skipUnlessDBFeature
 from django.utils import timezone
 from rest_framework.test import APIClient
+from PIL import Image
 
 from apps.evidencias.models import EvidenciaSolicitud
 from apps.evidencias.opciones import TipoEvidenciaSolicitud
@@ -40,6 +45,8 @@ from apps.usuarios.models import Permiso, PermisoRol, Rol, RolUsuario, Usuario
     ASIGNACION_REQUIERE_GPS_VIGENTE=True,
 )
 class PruebasConcurrenciaAsignaciones(TransactionTestCase):
+    serialized_rollback = True
+
     @classmethod
     def _comprobar_base_temporal(cls):
         nombre = connection.settings_dict["NAME"]
@@ -106,6 +113,7 @@ class PruebasConcurrenciaAsignaciones(TransactionTestCase):
             RolUsuario.objetos.create(usuario=usuario, rol=rol, tipo_alcance="EMPRESA", empresa=self.empresa)
             vehiculo = Vehiculo.objects.create(empresa=self.empresa, placa=f"CON-{indice}", tipo="MOTOCICLETA")
             repartidor = Repartidor.objects.create(
+                pais_operacion=pais, departamento_operacion="Departamento de prueba",
                 usuario=usuario, empresa=self.empresa, vehiculo=vehiculo, estado_operativo="AVAILABLE",
             )
             jornada = JornadaRepartidor.objects.create(repartidor=repartidor)
@@ -244,13 +252,71 @@ class PruebasConcurrenciaAsignaciones(TransactionTestCase):
         self.assertEqual(AsignacionSolicitud.objects.count(), 1)
         self._comprobar_integridad()
 
+    def test_preparar_foto_no_bloquea_el_gps_del_mismo_motorista(self):
+        from apps.evidencias.imagenes import preparar_imagen_base64
+        from apps.seguimiento.servicios import registrar_ubicaciones
+        from zoneinfo import ZoneInfo
+
+        ahora = timezone.now().astimezone(ZoneInfo("America/Tegucigalpa")).replace(hour=12, minute=0, second=0)
+        preparando, liberar = Event(), Event()
+        imagen = BytesIO()
+        Image.new("RGB", (32, 32), "white").save(imagen, format="PNG")
+        contenido = imagen.getvalue()
+
+        def preparar(archivo, instante):
+            preparando.set()
+            self.assertTrue(liberar.wait(15), "La preparación de la foto no fue liberada.")
+            return preparar_imagen_base64(archivo, instante)
+
+        def enviar_foto():
+            connections.close_all()
+            try:
+                cliente = APIClient()
+                cliente.force_authenticate(self.repartidores[0].usuario)
+                return cliente.post(f"/api/v1/solicitudes/{solicitud.pk}/evidencias/", {
+                    "tipo": "FOTO_INCIDENCIA", "archivo": SimpleUploadedFile("prueba.png", contenido, content_type="image/png"),
+                    "latitud": "14.072300", "longitud": "-87.192100",
+                }, format="multipart").status_code
+            finally:
+                connections.close_all()
+
+        def enviar_gps():
+            connections.close_all()
+            try:
+                return registrar_ubicaciones(self.repartidores[0].usuario, {"jornada_id": jornada.pk, "registros": [{
+                    "id_cliente": uuid.uuid4(), "latitud": Decimal("14.072300"), "longitud": Decimal("-87.192100"),
+                    "precision_metros": Decimal("8"), "registrada_en": ahora,
+                }]})["creados"]
+            finally:
+                connections.close_all()
+
+        with patch("django.utils.timezone.now", return_value=ahora):
+            JornadaRepartidor.objects.update(iniciada_en=ahora-timedelta(hours=1), cierre_programado_en=ahora.replace(hour=22))
+            RegistroUbicacion.objects.update(registrada_en=ahora-timedelta(seconds=1))
+            solicitud = self._pendiente()
+            self.assertEqual(self._asignar(solicitud, self.repartidores[0])[0], 201)
+            jornada = JornadaRepartidor.objects.get(repartidor=self.repartidores[0])
+            with patch("apps.evidencias.servicios.preparar_imagen_base64", side_effect=preparar):
+                with ThreadPoolExecutor(max_workers=2) as ejecutor:
+                    foto = ejecutor.submit(enviar_foto)
+                    try:
+                        self.assertTrue(preparando.wait(10))
+                        gps = ejecutor.submit(enviar_gps)
+                        self.assertEqual(gps.result(timeout=10), 1)
+                    finally:
+                        liberar.set()
+                    self.assertEqual(foto.result(timeout=20), 201)
+        evidencia = EvidenciaSolicitud.objects.get(solicitud=solicitud)
+        self.assertEqual(base64.b64decode(evidencia.contenido_base64), contenido)
+        self.assertEqual(evidencia.capturada_en, evidencia.imagen_guardada_en)
+
     def test_creaciones_automaticas_concurrentes_respetan_cupo(self):
         Repartidor.objects.filter(pk=self.repartidores[1].pk).update(estado_operativo="PAUSED")
         resultados = self._paralelas([self._crear] * 8)
         self.assertEqual([estado for estado, _ in resultados], [201] * 8)
         # SKIP LOCKED puede dejar pendientes; el evento siguiente las revisa.
         reintentar_solicitudes_pendientes(self.empresa.pk)
-        self.assertEqual(Solicitud.objects.filter(estado="ASSIGNED").count(), 5)
+        self.assertEqual(Solicitud.objects.filter(estado__in=ESTADOS_SOLICITUD_ACTIVOS).count(), 5)
         self.assertEqual(Solicitud.objects.filter(estado="PENDING").count(), 3)
         self._comprobar_integridad()
 
@@ -344,12 +410,15 @@ class PruebasConcurrenciaAsignaciones(TransactionTestCase):
 
     def test_reasignaciones_cruzadas_no_bloquean_y_conservan_historial(self):
         solicitudes = [self._pendiente(), self._pendiente()]
-        for solicitud, repartidor in zip(solicitudes, self.repartidores):
-            asignar_solicitud_manualmente(self.administrador, solicitud.pk, {"repartidor_id": repartidor.pk})
-        resultados = self._paralelas([
-            lambda: self._asignar(solicitudes[0], self.repartidores[1]),
-            lambda: self._asignar(solicitudes[1], self.repartidores[0]),
-        ], sincronizar_motoristas=True)
+        # La reasignación administrativa corresponde a ASSIGNED; el avance a
+        # GOING_TO_PICKUP tiene pruebas propias y no forma parte de esta carrera.
+        with patch("apps.solicitudes.flujo_automatico.programar_avance_automatico"):
+            for solicitud, repartidor in zip(solicitudes, self.repartidores):
+                asignar_solicitud_manualmente(self.administrador, solicitud.pk, {"repartidor_id": repartidor.pk})
+            resultados = self._paralelas([
+                lambda: self._asignar(solicitudes[0], self.repartidores[1]),
+                lambda: self._asignar(solicitudes[1], self.repartidores[0]),
+            ], sincronizar_motoristas=True)
         self.assertEqual([estado for estado, _ in resultados], [201, 201])
         self.assertEqual(AsignacionSolicitud.objects.filter(estado="REASIGNADA").count(), 2)
         self.assertEqual(NotificacionUsuario.objects.filter(tipo=TipoNotificacion.SOLICITUD_RETIRADA).count(), 2)

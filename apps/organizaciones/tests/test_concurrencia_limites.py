@@ -26,8 +26,8 @@ class PruebasConcurrenciaLimites(TransactionTestCase):
         self.admin = Usuario.objetos.create(correo="admin@bloqueos.test", nombres="Admin", apellidos="Prueba", es_superusuario=True)
         self.motoristas = []
         for indice in range(2):
-            usuario = Usuario.objetos.create(correo=f"motorista{indice}@bloqueos.test", nombres="Motorista", apellidos=str(indice))
-            self.motoristas.append(Repartidor.objects.create(usuario=usuario, empresa=self.empresa))
+            usuario = Usuario.objetos.create(correo=f"motorista{indice}@bloqueos.test", nombres="Motorista", apellidos=str(indice), empresa=self.empresa)
+            self.motoristas.append(Repartidor.objects.create(pais_operacion=(self.empresa).pais, departamento_operacion="Francisco Morazán", usuario=usuario, empresa=self.empresa))
         LimitesMotoristasRed.objects.get_or_create(pk=1)
 
     def _leer(self, identificador, adquirido, liberar, pids):

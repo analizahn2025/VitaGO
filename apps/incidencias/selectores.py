@@ -5,23 +5,17 @@ from django.http import Http404
 from rest_framework.exceptions import PermissionDenied
 
 from apps.incidencias.models import EvidenciaIncidencia, Incidencia
-from apps.usuarios.servicios import obtener_alcances_permiso
+from apps.usuarios.servicios import obtener_alcances_permisos
 
 
 def _consulta_base():
-    return Incidencia.objects.select_related(
-        "jornada",
-        "repartidor",
-        "repartidor__usuario",
-        "repartidor__empresa",
-        "solicitud",
-        "revisada_por",
-    ).prefetch_related("eventos")
+    return Incidencia.objects.prefetch_related("eventos")
 
 
 def listar_incidencias_autorizadas(usuario, filtros=None):
-    alcances_creacion = obtener_alcances_permiso(usuario, "incidencia.crear")
-    alcances_revision = obtener_alcances_permiso(usuario, "incidencia.revisar")
+    permisos = obtener_alcances_permisos(usuario, ("incidencia.crear", "incidencia.revisar"))
+    alcances_creacion = permisos["incidencia.crear"]
+    alcances_revision = permisos["incidencia.revisar"]
     if not (
         alcances_creacion.tiene_algun_alcance
         or alcances_revision.tiene_algun_alcance
@@ -56,9 +50,12 @@ def listar_incidencias_autorizadas(usuario, filtros=None):
     return consulta.order_by("-reportada_en", "-id")
 
 
-def obtener_incidencia_autorizada(usuario, incidencia_id):
+def obtener_incidencia_autorizada(usuario, incidencia_id, *, incluir_eventos=True):
     try:
-        return listar_incidencias_autorizadas(usuario).get(id=incidencia_id)
+        consulta = listar_incidencias_autorizadas(usuario)
+        if not incluir_eventos:
+            consulta = consulta.prefetch_related(None)
+        return consulta.get(id=incidencia_id)
     except (Incidencia.DoesNotExist, ValueError) as error:
         raise Http404(
             "La incidencia no existe o no está dentro de su alcance."
@@ -66,10 +63,8 @@ def obtener_incidencia_autorizada(usuario, incidencia_id):
 
 
 def listar_evidencias_incidencia_autorizadas(usuario, incidencia_id):
-    incidencia = obtener_incidencia_autorizada(usuario, incidencia_id)
-    return EvidenciaIncidencia.objects.filter(
-        incidencia=incidencia
-    ).select_related("repartidor", "repartidor__usuario")
+    incidencia = obtener_incidencia_autorizada(usuario, incidencia_id, incluir_eventos=False)
+    return EvidenciaIncidencia.objects.filter(incidencia=incidencia)
 
 
 def obtener_evidencia_incidencia_autorizada(
@@ -77,7 +72,7 @@ def obtener_evidencia_incidencia_autorizada(
     incidencia_id,
     evidencia_id,
 ):
-    incidencia = obtener_incidencia_autorizada(usuario, incidencia_id)
+    incidencia = obtener_incidencia_autorizada(usuario, incidencia_id, incluir_eventos=False)
     try:
         return EvidenciaIncidencia.objects.select_related(
             "incidencia",

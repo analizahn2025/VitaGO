@@ -5,7 +5,7 @@ from django.http import Http404
 from rest_framework.exceptions import PermissionDenied
 
 from apps.rutas.models import ParadaVersionRuta, RutaRepartidor, VersionRuta
-from apps.usuarios.servicios import obtener_alcances_permiso
+from apps.usuarios.servicios import obtener_alcances_permisos
 
 
 def _empresas_administrables(alcances_rutas, alcances_ubicacion):
@@ -20,7 +20,8 @@ def _empresas_administrables(alcances_rutas, alcances_ubicacion):
 
 
 def listar_rutas_autorizadas(usuario, filtros=None):
-    alcances_rutas = obtener_alcances_permiso(usuario, "ruta.ver")
+    permisos = obtener_alcances_permisos(usuario, ("ruta.ver", "repartidor.ver_ubicacion"))
+    alcances_rutas = permisos["ruta.ver"]
     if not alcances_rutas.tiene_algun_alcance:
         raise PermissionDenied('No tiene el permiso requerido: "ruta.ver".')
 
@@ -33,9 +34,7 @@ def listar_rutas_autorizadas(usuario, filtros=None):
             repartidor__empresa_id__in=alcances_rutas.empresas,
         )
 
-    alcances_ubicacion = obtener_alcances_permiso(
-        usuario, "repartidor.ver_ubicacion"
-    )
+    alcances_ubicacion = permisos["repartidor.ver_ubicacion"]
     administrables = RutaRepartidor.objects.none()
     if alcances_ubicacion.tiene_algun_alcance:
         empresas = _empresas_administrables(alcances_rutas, alcances_ubicacion)
@@ -56,7 +55,6 @@ def listar_rutas_autorizadas(usuario, filtros=None):
             Q(pk__in=propias.values("pk"))
             | Q(pk__in=administrables.values("pk"))
         )
-        .select_related("repartidor", "jornada")
         .annotate(cantidad_versiones=Count("versiones", distinct=True))
     )
     filtros = filtros or {}

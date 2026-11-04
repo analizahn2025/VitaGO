@@ -88,7 +88,9 @@ def presentar_ruta_vial(ruta, paradas, version_actual, *, calculo=None, metricas
         estado = "SOLO_KILOMETROS"
     else:
         if not disponible and ruta:
-            disponible = CalculoRutaVial.objects.filter(version__ruta=ruta, version__numero=version_actual).first()
+            disponible = CalculoRutaVial.objects.filter(
+                version__ruta=ruta, version__numero=version_actual,
+            ).select_related("version").first()
         estado = disponible.estado if disponible else "PENDIENTE"
         if disponible and disponible.estado == "CALCULADA":
             estado = "VENCIDA" if disponible.expira_en <= ahora else "ITINERARIO_CAMBIO"

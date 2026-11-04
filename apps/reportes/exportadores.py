@@ -1,4 +1,4 @@
-"""Dos formatos sobre el mismo reporte; sin consultas ni llamadas a proveedores."""
+"""Una tabla por descarga, con el mismo contenido en Excel y PDF."""
 
 from datetime import date, datetime
 from decimal import Decimal
@@ -13,10 +13,10 @@ from openpyxl.styles import Alignment, Font, PatternFill
 from openpyxl.utils import get_column_letter
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.styles import ParagraphStyle
 from reportlab.lib.units import mm
 from reportlab.pdfbase.pdfmetrics import stringWidth
-from reportlab.platypus import LongTable, PageBreak, Paragraph, SimpleDocTemplate, Spacer, TableStyle
+from reportlab.platypus import LongTable, Paragraph, SimpleDocTemplate, Spacer, TableStyle
 from rest_framework.exceptions import ValidationError
 
 from apps.reportes.fuentes import FUENTE_NORMAL, FUENTE_NEGRITA, registrar_fuentes, texto_pdf
@@ -24,24 +24,47 @@ from apps.reportes.fuentes import FUENTE_NORMAL, FUENTE_NEGRITA, registrar_fuent
 
 COLOR = "006A64"
 _ESTILO_MEDICION_EXCEL = ParagraphStyle("MedicionExcel", fontName="Helvetica", fontSize=11, leading=15)
+_RESUMEN = ("Motorista", "Empresa", "Placa", "Jornadas", "Completados", "Fallidos", "Cancelados", "Km GPS", "Temp. promedio °C")
+_SERVICIOS = ("Motorista", "Empresa del servicio", "Solicitud", "Origen", "Destino", "Estado servicio / asignación",
+              "Asignada en", "Fin de asignación", "Tubos", "Frascos")
+
+
+def _tabla(datos):
+    if datos["tipo"] == "motoristas":
+        return "Resumen", _RESUMEN, (42, 30, 16, 14, 18, 14, 16, 16, 23), (56, 40, 22, 22, 26, 22, 25, 25, 28)
+    return "Servicios", _SERVICIOS, (36, 26, 22, 30, 38, 28, 24, 24, 10, 10), (36, 25, 24, 33, 34, 28, 27, 27, 15, 17)
+
+
+def _filas(datos):
+    for motorista in datos["motoristas"]:
+        if datos["tipo"] == "motoristas":
+            r = motorista["resumen"]
+            km, sol = r["kilometraje"], r["solicitudes"]
+            temperatura = r["temperaturas"]["promedio_c"]
+            yield motorista, [motorista["nombre"], motorista["empresa"], motorista["placa"],
+                km["jornadas_cerradas"] + km["jornadas_sin_cierre_en_periodo"],
+                sol["entregadas"], sol["fallidas"], sol["canceladas"],
+                Decimal(km["kilometros_medidos"]) if km["kilometros_medidos"] is not None else None,
+                Decimal(temperatura) if temperatura is not None else None], not km["completo"]
+        else:
+            for s in motorista["servicios"]:
+                yield motorista, [motorista["nombre"], s["empresa"], s["numero"], s["origen"], s["destino"],
+                    f'{s["estado_actual"]}\n{s["estado_asignacion"]}', s["asignada"], s["fin_asignacion"], s["tubos"], s["frascos"]], False
 
 
 def _medir_texto_excel(texto, ancho):
     if "\n" not in texto and stringWidth(texto, "Helvetica", 11) <= ancho:
-        return 45
-    parrafo = Paragraph(escape(texto).replace("\n", "<br/>"), _ESTILO_MEDICION_EXCEL)
-    return parrafo.wrap(ancho, 1000000)[1] + 6
+        return 28
+    return Paragraph(escape(texto).replace("\n", "<br/>"), _ESTILO_MEDICION_EXCEL).wrap(ancho, 1000000)[1] + 8
 
 
 def _altura_fila_excel(hoja, celdas, medir_texto):
-    altura = 45
+    altura = 28
     for celda in celdas:
         if not isinstance(celda.value, str) or not celda.value:
             continue
         columna = hoja.column_dimensions[celda.column_letter]
         texto = celda.value.replace("\r\n", "\n").replace("\r", "\n").expandtabs(4)
-        # Unidades de ancho Excel a puntos, con margen para Calibri y sus
-        # sustitutos. Paragraph calcula el ajuste por palabras y saltos de línea.
         ancho = max(8, (columna.width * 7 - 12) * 0.75)
         alto = medir_texto(texto, ancho)
         if alto > 409.5 and columna.width < 60:
@@ -60,104 +83,64 @@ def _valor_excel(valor, zona):
         valor = ILLEGAL_CHARACTERS_RE.sub("", valor)
         if len(valor) > 32767:
             raise ValidationError({"formato": "Un texto supera los 32767 caracteres por celda de Excel. Descargue el reporte en PDF."})
-    return valor
-
-
-def _tablas(motorista):
-    r = motorista["resumen"]
-    km, sol, tubos, frascos, temp = (r[c] for c in ("kilometraje", "solicitudes", "tubos", "frascos", "temperaturas"))
-    yield "Resumen", (
-        "Asignadas", "Recolectadas", "Entregadas", "Fallidas", "Canceladas", "Tubos recogidos", "Tubos entregados",
-        "Frascos recogidos", "Frascos entregados", "Recolecciones sin tubos", "Recolecciones sin frascos",
-        "Km GPS medidos", "Km GPS consolidados", "Jornadas cerradas", "Jornadas con medición", "Jornadas consolidadas",
-        "Jornadas sin cierre en período", "Kilometraje completo", "Temperatura mínima °C", "Temperatura máxima °C",
-        "Temperatura promedio °C", "Lecturas sin temperatura", "Desvíos detectados", "Perfil activo",
-    ), [[sol["asignadas"], sol["recolectadas"], sol["entregadas"], sol["fallidas"], sol["canceladas"],
-         tubos["recogidos_conocidos"], tubos["entregados_conocidos"], frascos["recogidos_conocidos"], frascos["entregados_conocidos"],
-         tubos["recolecciones_sin_cantidad"], frascos["recolecciones_sin_cantidad"],
-         *[Decimal(km[c]) if km[c] is not None else None for c in ("kilometros_medidos", "kilometros_consolidados")],
-         km["jornadas_cerradas"], km["jornadas_con_medicion"], km["jornadas_consolidadas"], km["jornadas_sin_cierre_en_periodo"],
-         km["completo"], *[Decimal(temp[c]) if temp[c] is not None else None for c in ("minima_c", "maxima_c", "promedio_c")],
-         temp["lecturas_sin_temperatura"], len(motorista["desviaciones"]), motorista["activo"]]]
-    yield "Jornadas", ("Fecha operativa", "Inicio", "Fin", "Estado", "Km GPS", "Calidad GPS", "Minutos activos",
-                       "Minutos operativos", "Minutos de almuerzo", "Servicios completados"), [
-        [j[c] for c in ("fecha", "inicio", "fin", "estado", "km", "calidad", "minutos_activos", "minutos_operativos", "minutos_almuerzo", "entregas")]
-        for j in motorista["jornadas"]]
-    yield "Servicios", ("Solicitud", "Empresa del servicio", "Sucursal", "Solicitante", "Origen", "Destino", "Modalidad", "Prioridad",
-                        "Estado actual del servicio", "Estado de asignación", "Asignada en", "Fin de asignación", "Tubos", "Frascos"), [
-        [s[c] for c in ("numero", "empresa", "sucursal", "solicitante", "origen", "destino", "modalidad", "prioridad", "estado_actual",
-                       "estado_asignacion", "asignada", "fin_asignacion", "tubos", "frascos")] for s in motorista["servicios"]]
-    yield "Temperaturas", ("Solicitud", "Registrada en", "Temperatura °C", "Fuente"), [
-        [t[c] for c in ("solicitud", "fecha", "temperatura", "fuente")] for t in motorista["temperaturas"]]
-    yield "Desvíos", ("Solicitud", "Etapa", "Detectado en", "Cerrado en", "Motivo de cierre"), [
-        [a[c] for c in ("solicitud", "etapa", "detectada", "fin", "motivo_cierre")] for a in motorista["desviaciones"]]
+    return "N/D" if valor is None else valor
 
 
 def exportar_excel(datos):
+    nombre, columnas, anchos, _ = _tabla(datos)
     libro = Workbook()
-    libro.remove(libro.active)
-    filas_hoja = {}
-    alineacion = Alignment(vertical="top", wrap_text=True)
-    # Caché acotada a esta descarga; no retiene textos de otros usuarios.
+    hoja = libro.active
+    hoja.title = nombre
+    hoja.sheet_view.showGridLines = False
+    hoja.sheet_properties.tabColor = COLOR
+    hoja.append([])
+    hoja.append(["VitaGo | " + ("Resumen de motoristas" if datos["tipo"] == "motoristas" else "Servicios del día")])
+    hoja.append([f'{datos["etiqueta"]} | {datos["fecha_desde"]} a {datos["fecha_hasta"]}'])
+    hoja.append([datos["nota"]])
+    hoja.append([])
+    hoja.append(columnas)
+    hoja["A2"].font = Font(name="Arial", size=14, bold=True, color=COLOR)
+    for direccion in ("A3", "A4"):
+        hoja[direccion].font = Font(name="Arial", size=10, italic=True, color="52645E")
+    hoja.row_dimensions[2].height = 26
+    hoja.row_dimensions[6].height = 38
+    hoja.freeze_panes = "D7" if datos["tipo"] == "motoristas" else "C7"
+    for indice, ancho in enumerate(anchos, 1):
+        hoja.column_dimensions[get_column_letter(indice)].width = ancho
+    for celda in hoja[6]:
+        celda.fill = PatternFill("solid", fgColor=COLOR)
+        celda.font = Font(name="Arial", size=11, color="FFFFFF", bold=True)
+        celda.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
     medir_texto = lru_cache(maxsize=1024)(_medir_texto_excel)
-    # Los encabezados se obtienen del primer motorista; sin resultados se usa
-    # una hoja informativa para no inventar filas ni métricas.
-    if not datos["motoristas"]:
-        hoja = libro.create_sheet("Resumen")
-        hoja.append(["VitaGo - Reporte de motoristas"])
-        hoja.append(["No hay motoristas dentro de los filtros y permisos indicados."])
-        hoja.append([f'{datos["fecha_desde"]} a {datos["fecha_hasta"]}; generado {datos["generado_en"].isoformat()}'])
-        hoja.append([datos["nota"]])
-        hoja.column_dimensions["A"].width = 100
-        hoja["A4"].alignment = Alignment(wrap_text=True)
-        hoja.row_dimensions[4].height = 60
-    for motorista in datos["motoristas"]:
-        zona = ZoneInfo(motorista["zona"])
-        for nombre, columnas, filas in _tablas(motorista):
-            if nombre not in libro.sheetnames:
-                hoja = libro.create_sheet(nombre)
-                hoja.append(["VitaGo - " + nombre])
-                hoja.append([f'{datos["fecha_desde"]} a {datos["fecha_hasta"]}; generado {datos["generado_en"].isoformat()}'])
-                hoja.append([datos["nota"]])
-                hoja.append([])
-                hoja.append(["Motorista", "Empresa de flota", "Placa", "Zona horaria", *columnas])
-                filas_hoja[nombre] = 5
-                hoja.merge_cells(start_row=1, start_column=1, end_row=1, end_column=4 + len(columnas))
-                hoja.merge_cells(start_row=2, start_column=1, end_row=2, end_column=4 + len(columnas))
-                hoja.merge_cells(start_row=3, start_column=1, end_row=3, end_column=4 + len(columnas))
-                hoja["A1"].font = Font(size=16, bold=True, color=COLOR)
-                hoja["A3"].alignment = Alignment(wrap_text=True, vertical="top")
-                hoja.row_dimensions[3].height = 45
-                hoja.row_dimensions[5].height = 42
-                hoja.freeze_panes = "E6"
-                hoja.sheet_view.showGridLines = False
-                for celda in hoja[5]:
-                    celda.fill = PatternFill("solid", fgColor=COLOR)
-                    celda.font = Font(color="FFFFFF", bold=True)
-                    celda.alignment = Alignment(wrap_text=True, vertical="center")
-                for indice, encabezado in enumerate(["Motorista", "Empresa de flota", "Placa", "Zona horaria", *columnas], 1):
-                    hoja.column_dimensions[get_column_letter(indice)].width = 30 if indice in (1, 2, 4) else min(38, max(16, len(encabezado)))
-            hoja = libro[nombre]
-            for fila in filas:
-                valores = [motorista["nombre"], motorista["empresa"], motorista["placa"], motorista["zona"], *fila]
-                hoja.append([_valor_excel(v, zona) for v in valores])
-                filas_hoja[nombre] += 1
-                numero_fila = filas_hoja[nombre]
-                celdas = next(hoja.iter_rows(min_row=numero_fila, max_row=numero_fila, min_col=1, max_col=len(valores)))
-                for celda in celdas:
-                    if isinstance(celda.value, str):
-                        celda.data_type = "s"  # Un nombre que empieza con '=' nunca se ejecuta como fórmula.
-                    if isinstance(celda.value, datetime):
-                        celda.number_format = "yyyy-mm-dd hh:mm:ss"
-                    elif isinstance(celda.value, date):
-                        celda.number_format = "yyyy-mm-dd"
-                    elif isinstance(celda.value, (float, Decimal)):
-                        celda.number_format = "0.000"
-                    celda.alignment = alineacion
-                hoja.row_dimensions[numero_fila].height = _altura_fila_excel(hoja, celdas, medir_texto)
-    for hoja in libro:
-        if hoja.max_row >= 5:
-            hoja.auto_filter.ref = f"A5:{get_column_letter(hoja.max_column)}{hoja.max_row}"
+    ultima = 6
+    for motorista, fila, parcial in _filas(datos):
+        hoja.append([_valor_excel(v, ZoneInfo(motorista["zona"])) for v in fila])
+        ultima += 1
+        celdas = next(hoja.iter_rows(min_row=ultima, max_row=ultima, min_col=1, max_col=len(columnas)))
+        for celda in celdas:
+            texto = isinstance(celda.value, str)
+            if texto:
+                celda.data_type = "s"  # Incluso un nombre que empieza con '=' es texto literal.
+            if isinstance(celda.value, datetime):
+                celda.number_format = "yyyy-mm-dd hh:mm:ss"
+            elif isinstance(celda.value, date):
+                celda.number_format = "yyyy-mm-dd"
+            elif isinstance(celda.value, (float, Decimal)):
+                celda.number_format = "0.00" if celda.column == 9 else r"0.000\ \*" if parcial else "0.000"
+            celda.font = Font(name="Arial", size=11, color="25332F")
+            celda.alignment = Alignment(horizontal="left" if texto and celda.value != "N/D" else "right", vertical="center", wrap_text=True)
+            if ultima % 2:
+                celda.fill = PatternFill("solid", fgColor="EDF6F4")
+        hoja.row_dimensions[ultima].height = _altura_fila_excel(hoja, celdas, medir_texto)
+    if ultima == 6:
+        hoja.append(["Sin resultados dentro de los filtros y permisos indicados."])
+        hoja.row_dimensions[7].height = 28
+    hoja.auto_filter.ref = f"A6:{get_column_letter(len(columnas))}{ultima}"
+    hoja.print_title_rows = "1:6"
+    hoja.sheet_properties.pageSetUpPr.fitToPage = True
+    hoja.page_setup.orientation = "landscape"
+    hoja.page_setup.paperSize = hoja.PAPERSIZE_A4
+    hoja.page_setup.fitToWidth, hoja.page_setup.fitToHeight = 1, 0
     salida = BytesIO()
     libro.save(salida)
     return salida.getvalue(), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -165,8 +148,6 @@ def exportar_excel(datos):
 
 class _ParrafoReporte(Paragraph):
     def wrap(self, ancho, alto):
-        # Las tablas miden varias veces el mismo párrafo. El cálculo de líneas
-        # depende del ancho, no del alto; split puede invalidarlo al borrar blPara.
         if ancho == getattr(self, "_ancho_calculado", None) and hasattr(self, "blPara"):
             return self.width, self.height
         resultado = super().wrap(ancho, alto)
@@ -175,96 +156,71 @@ class _ParrafoReporte(Paragraph):
 
 
 def exportar_pdf(datos):
-    salida = BytesIO()
     registrar_fuentes()
-    estilos = getSampleStyleSheet()
-    for estilo in estilos.byName.values():
-        if isinstance(estilo, ParagraphStyle):
-            estilo.fontName = FUENTE_NEGRITA if "Bold" in estilo.fontName else FUENTE_NORMAL
-    estilos.add(ParagraphStyle(name="Dato", fontName=FUENTE_NORMAL, fontSize=8, leading=11, spaceAfter=4))
-    estilos.add(ParagraphStyle(name="CabeceraTabla", parent=estilos["Dato"], textColor=colors.white, fontName=FUENTE_NEGRITA))
-    estilos["Heading1"].textColor = colors.HexColor("#" + COLOR)
-    estilos["Heading2"].keepWithNext = True
+    salida = BytesIO()
+    estilos = {
+        "dato": ParagraphStyle("Dato", fontName=FUENTE_NORMAL, fontSize=8, leading=11),
+        "cabecera": ParagraphStyle("Cabecera", fontName=FUENTE_NEGRITA, fontSize=8, leading=11, textColor=colors.white),
+        "titulo": ParagraphStyle("Titulo", fontName=FUENTE_NEGRITA, fontSize=17, leading=21, textColor=colors.HexColor("#"+COLOR)),
+    }
+    nombre, columnas, _, anchos = _tabla(datos)
+    titulo = "Resumen de motoristas" if datos["tipo"] == "motoristas" else "Servicios del día"
     documento = SimpleDocTemplate(salida, pagesize=landscape(A4), leftMargin=14*mm, rightMargin=14*mm,
-                                 topMargin=14*mm, bottomMargin=16*mm, title="VitaGo - Reporte operativo de motoristas", author="VitaGo")
+        topMargin=14*mm, bottomMargin=16*mm, title="VitaGo - " + titulo, author="VitaGo")
 
-    def parrafo(valor, estilo="Dato", zona=None):
+    def texto(valor, zona=None):
         if valor is None:
-            valor = "N/D"
-        elif isinstance(valor, datetime):
-            valor = valor.astimezone(zona).strftime("%d/%m/%Y %H:%M:%S") if zona else valor.isoformat()
-        elif isinstance(valor, date):
-            valor = valor.strftime("%d/%m/%Y")
-        elif isinstance(valor, bool):
-            valor = "Sí" if valor else "No"
+            return "N/D"
+        if isinstance(valor, datetime):
+            return valor.astimezone(zona).strftime("%d/%m/%Y %H:%M:%S")
+        return str(valor)
+
+    def parrafo(valor, estilo="dato"):
         return _ParrafoReporte(texto_pdf(str(valor), estilos[estilo].fontName), estilos[estilo])
 
-    def tabla(encabezados, filas, anchos, zona, titulo=None):
-        contenido = [[parrafo(titulo, "Heading2"), *[""] * (len(encabezados)-1)]] if titulo else []
-        fila_cabecera = len(contenido)
-        contenido.append([parrafo(c, "CabeceraTabla") for c in encabezados])
-        contenido.extend([parrafo(c, zona=zona) for c in fila] for fila in filas)
-        tabla = LongTable(contenido, colWidths=[a*mm for a in anchos], repeatRows=fila_cabecera+1, splitInRow=1, hAlign="LEFT")
-        tabla.setStyle(TableStyle([("BACKGROUND", (0,fila_cabecera), (-1,fila_cabecera), colors.HexColor("#"+COLOR)),
-            ("ROWBACKGROUNDS", (0,fila_cabecera+1), (-1,-1), [colors.white, colors.HexColor("#EDF6F4")]),
+    def tabla(encabezados, filas, anchuras, dividir=False):
+        contenido = [[parrafo(c, "cabecera") for c in encabezados], *filas]
+        t = LongTable(contenido, colWidths=[a*mm for a in anchuras], repeatRows=1, splitInRow=int(dividir), hAlign="LEFT")
+        t.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#"+COLOR)),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#EDF6F4")]),
             ("VALIGN", (0,0), (-1,-1), "TOP"), ("LEFTPADDING", (0,0), (-1,-1), 6),
-            ("RIGHTPADDING", (0,0), (-1,-1), 6), ("TOPPADDING", (0,0), (-1,-1), 6), ("BOTTOMPADDING", (0,0), (-1,-1), 6)]))
-        return tabla
+            ("RIGHTPADDING", (0,0), (-1,-1), 6), ("TOPPADDING", (0,0), (-1,-1), 7), ("BOTTOMPADDING", (0,0), (-1,-1), 7)]))
+        return t
 
-    historia = [parrafo("VitaGo | Reporte operativo", "Title"),
-        parrafo(f'Período: {datos["fecha_desde"]} a {datos["fecha_hasta"]} | Generado: {datos["generado_en"].isoformat()}'),
-        parrafo(datos["nota"]), Spacer(1, 5*mm)]
-    if not datos["motoristas"]:
-        historia.append(parrafo("No hay motoristas dentro de los filtros y permisos indicados."))
-    for indice, motorista in enumerate(datos["motoristas"]):
-        if indice:
-            historia.append(PageBreak())
-        zona, resumen = ZoneInfo(motorista["zona"]), motorista["resumen"]
-        historia.extend([parrafo(motorista["nombre"], "Heading1"),
-            parrafo(f'{motorista["empresa"]} | Placa: {motorista["placa"] or "N/D"} | Zona horaria: {motorista["zona"]} | Perfil activo: {"Sí" if motorista["activo"] else "No"}')])
-        sol, km = resumen["solicitudes"], resumen["kilometraje"]
-        historia.append(tabla(["Asignadas", "Recolectadas", "Entregadas", "Fallidas", "Canceladas", "Km GPS", "Km consolidados"],
-            [[sol[c] for c in ("asignadas", "recolectadas", "entregadas", "fallidas", "canceladas")]
-             + [km["kilometros_medidos"], km["kilometros_consolidados"]]], [38]*7, zona))
-        historia.append(parrafo(f'Jornadas cerradas: {km["jornadas_cerradas"]}. Sin cierre en período: {km["jornadas_sin_cierre_en_periodo"]}. '
-                               f'Kilometraje completo: {"Sí" if km["completo"] else "No"}.'))
-        tubos, frascos, temp = (resumen[c] for c in ("tubos", "frascos", "temperaturas"))
-        historia.append(tabla(["Tubos recogidos / entregados", "Frascos recogidos / entregados", "Temperatura mínima / máxima / promedio °C"],
-            [[f'{tubos["recogidos_conocidos"]} / {tubos["entregados_conocidos"]}',
-              f'{frascos["recogidos_conocidos"]} / {frascos["entregados_conocidos"]}',
-              ' / '.join(temp[c] or "N/D" for c in ("minima_c", "maxima_c", "promedio_c"))]], [80,80,106], zona))
-        historia.append(parrafo(f'Recolecciones sin cantidad de tubos: {tubos["recolecciones_sin_cantidad"]}. '
-                               f'Sin cantidad de frascos: {frascos["recolecciones_sin_cantidad"]}. '
-                               f'Lecturas sin temperatura: {temp["lecturas_sin_temperatura"]}. Desvíos detectados: {len(motorista["desviaciones"])}.'))
-        for nombre, encabezados, filas in _tablas(motorista):
-            if nombre == "Resumen":
-                continue
-            if nombre != "Servicios" or not filas:
-                historia.append(parrafo(nombre, "Heading2"))
-            if not filas:
-                historia.append(parrafo("Sin registros en el período."))
-            elif nombre == "Servicios":
-                for indice_servicio, fila in enumerate(filas):
-                    detalle = "\n".join(f"{c}: {v if v is not None else 'N/D'}" for c, v in zip(encabezados[1:],
-                        [v.astimezone(zona).strftime('%d/%m/%Y %H:%M:%S') if isinstance(v, datetime) else v for v in fila[1:]]))
-                    # Cada servicio conserva su identificador como encabezado
-                    # repetido incluso si un detalle muy largo ocupa varias páginas.
-                    historia.append(tabla([f"Solicitud {fila[0]}"], [[detalle]], [266], zona,
-                                          titulo="Servicios" if indice_servicio == 0 else None))
-                    historia.append(Spacer(1, 2*mm))
-            elif nombre == "Jornadas":
-                historia.append(tabla(["Fecha", "Inicio / Fin", "Estado / Calidad", "Km GPS", "Min. activos / operativos / almuerzo", "Completados"],
-                    [[f[0], f'{parrafo(f[1],zona=zona).getPlainText()}\n{parrafo(f[2],zona=zona).getPlainText()}', f'{f[3]}\n{f[5]}',
-                      f[4], ' / '.join('N/D' if v is None else str(v) for v in f[6:9]), f[9]] for f in filas], [25,48,50,25,83,35], zona))
-            else:
-                historia.append(tabla(encabezados, filas, [266/len(encabezados)]*len(encabezados), zona))
-        historia.append(Spacer(1, 4*mm))
+    historia = [parrafo("VitaGo | " + titulo, "titulo"), Spacer(1, 3*mm),
+        parrafo(f'{datos["etiqueta"]} | {datos["fecha_desde"]} a {datos["fecha_hasta"]}'),
+        Spacer(1, 2*mm), parrafo(datos["nota"]), Spacer(1, 5*mm)]
+    filas = []
+    hubo_filas = False
+    for motorista, valores, parcial in _filas(datos):
+        hubo_filas = True
+        zona = ZoneInfo(motorista["zona"])
+        valores = [texto(v, zona) for v in valores]
+        if datos["tipo"] == "motoristas" and parcial and valores[7] != "N/D":
+            valores[7] += " *"
+        celdas = [parrafo(v) for v in valores]
+        # Las filas habituales comparten una tabla. Un texto extraordinariamente
+        # largo usa una ficha con identificador repetido en cada continuación.
+        altura = max(c.wrap(a*mm-12, 1000000)[1] for c, a in zip(celdas, anchos))
+        if altura > 100*mm:
+            if filas:
+                historia.extend([tabla(columnas, filas, anchos), Spacer(1, 3*mm)])
+                filas = []
+            identificador = f"Solicitud {valores[2]}" if datos["tipo"] == "servicios" else f"Motorista {motorista['id']}"
+            detalle = "\n".join(f"{c}: {v}" for c, v in zip(columnas, valores))
+            historia.extend([tabla([identificador], [[parrafo(detalle)]], [266], dividir=True), Spacer(1, 3*mm)])
+        else:
+            filas.append(celdas)
+    if filas:
+        historia.append(tabla(columnas, filas, anchos))
+    if not hubo_filas:
+        historia.append(parrafo("Sin resultados dentro de los filtros y permisos indicados."))
 
     def pie(canvas, doc):
         canvas.saveState()
         canvas.setFont(FUENTE_NORMAL, 8)
         canvas.setFillColor(colors.HexColor("#52645E"))
-        canvas.drawString(14*mm, 9*mm, "VitaGo | Información operativa para administración")
+        canvas.drawString(14*mm, 9*mm, "VitaGo | Administración")
         canvas.drawRightString(283*mm, 9*mm, f"Página {doc.page}")
         canvas.restoreState()
 

@@ -37,7 +37,7 @@ python "C:\Users\Desarrollador1\Desktop\VitaGo\backend\scripts\docker\iniciar.py
 ```
 
 El lanzador resuelve la raíz, usa `.venv` si existe, valida la configuración,
-construye `vitago-backend:0.56.0`, inicia los servicios y espera sus healthchecks.
+construye `vitago-backend:0.57.0`, inicia los servicios y espera sus healthchecks.
 Ya no requiere `--modo` ni combinar varios Compose o archivos de variables.
 
 | Servicio | Dirección en esta computadora | Base |
@@ -112,6 +112,13 @@ disponible en el contenedor y RAIZ_ARCHIVOS configurado para importarlos; no se
 incluyen en la imagen. Un original no encontrado se conserva como pendiente.
 
 ## Pruebas aisladas
+
+La versión 0.57.0 separa el resumen mensual/quincenal de motoristas (una tabla,
+promedio de temperatura de las lecturas reales) y los servicios diarios en
+Excel/PDF. Los filtros de rango diario se retiran del resumen descargable.
+Nuevo endpoint `GET /api/v1/reportes/servicios/descargar/`; contrato completo en
+API 0.57. Conserva permisos y zonas operativas, sin modelos, dependencias,
+variables ni migraciones nuevas. El frontend debe integrar los nuevos filtros.
 
 La versión 0.56.0 reduce los reintentos innecesarios del GPS: consulta si hay
 pendientes y algún motorista elegible antes de recorrer la cola. Al haber cupo,

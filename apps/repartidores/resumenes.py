@@ -107,7 +107,7 @@ def _actividad_por_fecha(identificadores, campo, inicio, fin, *, estados=None):
     )}
 
 
-def _resumen_grupo(motoristas, inicio, fin, ahora):
+def _resumen_grupo(motoristas, inicio, fin, ahora, *, incluir_lecturas=True):
     ids = [r.pk for r in motoristas]
     asignadas = {f["repartidor_id"]: f["cantidad"] for f in AsignacionSolicitud.objects.filter(
         repartidor_id__in=ids, asignada_en__gte=inicio, asignada_en__lt=fin,
@@ -137,10 +137,11 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
         minima=Min("temperatura_contenedor_c"), maxima=Max("temperatura_contenedor_c"), promedio=Avg("temperatura_contenedor_c"),
     )}
     ultimas = defaultdict(list)
-    for lectura in lecturas.select_related("solicitud").annotate(posicion=Window(
-        RowNumber(), partition_by=[F("repartidor_id")], order_by=[F("capturada_en").desc(), F("id").desc()],
-    )).filter(posicion__lte=5):
-        ultimas[lectura.repartidor_id].append(_lectura(lectura))
+    if incluir_lecturas:
+        for lectura in lecturas.select_related("solicitud").annotate(posicion=Window(
+            RowNumber(), partition_by=[F("repartidor_id")], order_by=[F("capturada_en").desc(), F("id").desc()],
+        )).filter(posicion__lte=5):
+            ultimas[lectura.repartidor_id].append(_lectura(lectura))
     resultados = {}
     for r in motoristas:
         recogida, entrega = recogidas.get(r.pk, {}), entregadas.get(r.pk, {})
@@ -178,7 +179,7 @@ def _resumen_grupo(motoristas, inicio, fin, ahora):
     return resultados
 
 
-def construir_resumenes(motoristas, fecha=None, *, ahora=None, fecha_hasta=None):
+def construir_resumenes(motoristas, fecha=None, *, ahora=None, fecha_hasta=None, incluir_lecturas=True):
     ahora = ahora or timezone.now()
     grupos, periodos = defaultdict(list), {}
     for r in motoristas:
@@ -190,7 +191,7 @@ def construir_resumenes(motoristas, fecha=None, *, ahora=None, fecha_hasta=None)
         grupos[periodos[r.pk][2:]].append(r)
     metricas = {}
     for (inicio, fin), grupo in grupos.items():
-        metricas.update(_resumen_grupo(grupo, inicio, fin, ahora))
+        metricas.update(_resumen_grupo(grupo, inicio, fin, ahora, incluir_lecturas=incluir_lecturas))
     resultados = []
     for r in motoristas:
         fecha_local, zona, inicio, fin = periodos[r.pk]

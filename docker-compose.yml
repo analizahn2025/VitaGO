@@ -10,7 +10,7 @@ x-desviaciones: &desviaciones
   DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS: ${DESVIACION_ANTIGUEDAD_MAXIMA_SEGUNDOS:-60}
 
 x-api: &api
-  image: ${IMAGEN_BACKEND:-vitago-backend:0.56.0}
+  image: ${IMAGEN_BACKEND:-vitago-backend:0.57.0}
   pull_policy: ${POLITICA_DESCARGA_IMAGEN:-never}
   build:
     context: .

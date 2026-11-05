@@ -22,7 +22,11 @@ from rest_framework.exceptions import ValidationError
 from apps.reportes.fuentes import FUENTE_NORMAL, FUENTE_NEGRITA, registrar_fuentes, texto_pdf
 
 
-COLOR = "006A64"
+COLOR = "D1393D"
+COLOR_SECUNDARIO = "B92D33"
+FONDO_ALTERNADO = "FBEAEC"
+TEXTO_NORMAL = "333333"
+TEXTO_SECUNDARIO = "595959"
 _ESTILO_MEDICION_EXCEL = ParagraphStyle("MedicionExcel", fontName="Helvetica", fontSize=11, leading=15)
 _RESUMEN = ("Motorista", "Empresa", "Placa", "Jornadas", "Completados", "Fallidos", "Cancelados", "Km GPS", "Temp. promedio °C")
 _SERVICIOS = ("Motorista", "Empresa del servicio", "Solicitud", "Origen", "Destino", "Estado servicio / asignación",
@@ -101,7 +105,7 @@ def exportar_excel(datos):
     hoja.append(columnas)
     hoja["A2"].font = Font(name="Arial", size=14, bold=True, color=COLOR)
     for direccion in ("A3", "A4"):
-        hoja[direccion].font = Font(name="Arial", size=10, italic=True, color="52645E")
+        hoja[direccion].font = Font(name="Arial", size=10, italic=True, color=TEXTO_SECUNDARIO)
     hoja.row_dimensions[2].height = 26
     hoja.row_dimensions[6].height = 38
     hoja.freeze_panes = "D7" if datos["tipo"] == "motoristas" else "C7"
@@ -127,10 +131,10 @@ def exportar_excel(datos):
                 celda.number_format = "yyyy-mm-dd"
             elif isinstance(celda.value, (float, Decimal)):
                 celda.number_format = "0.00" if celda.column == 9 else r"0.000\ \*" if parcial else "0.000"
-            celda.font = Font(name="Arial", size=11, color="25332F")
+            celda.font = Font(name="Arial", size=11, color=TEXTO_NORMAL)
             celda.alignment = Alignment(horizontal="left" if texto and celda.value != "N/D" else "right", vertical="center", wrap_text=True)
             if ultima % 2:
-                celda.fill = PatternFill("solid", fgColor="EDF6F4")
+                celda.fill = PatternFill("solid", fgColor=FONDO_ALTERNADO)
         hoja.row_dimensions[ultima].height = _altura_fila_excel(hoja, celdas, medir_texto)
     if ultima == 6:
         hoja.append(["Sin resultados dentro de los filtros y permisos indicados."])
@@ -182,7 +186,7 @@ def exportar_pdf(datos):
         contenido = [[parrafo(c, "cabecera") for c in encabezados], *filas]
         t = LongTable(contenido, colWidths=[a*mm for a in anchuras], repeatRows=1, splitInRow=int(dividir), hAlign="LEFT")
         t.setStyle(TableStyle([("BACKGROUND", (0,0), (-1,0), colors.HexColor("#"+COLOR)),
-            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#EDF6F4")]),
+            ("ROWBACKGROUNDS", (0,1), (-1,-1), [colors.white, colors.HexColor("#"+FONDO_ALTERNADO)]),
             ("VALIGN", (0,0), (-1,-1), "TOP"), ("LEFTPADDING", (0,0), (-1,-1), 6),
             ("RIGHTPADDING", (0,0), (-1,-1), 6), ("TOPPADDING", (0,0), (-1,-1), 7), ("BOTTOMPADDING", (0,0), (-1,-1), 7)]))
         return t
@@ -219,7 +223,7 @@ def exportar_pdf(datos):
     def pie(canvas, doc):
         canvas.saveState()
         canvas.setFont(FUENTE_NORMAL, 8)
-        canvas.setFillColor(colors.HexColor("#52645E"))
+        canvas.setFillColor(colors.HexColor("#"+COLOR_SECUNDARIO))
         canvas.drawString(14*mm, 9*mm, "VitaGo | Administración")
         canvas.drawRightString(283*mm, 9*mm, f"Página {doc.page}")
         canvas.restoreState()

@@ -85,17 +85,9 @@ class SerializadorRelacionUbicacionEmpresa(serializers.ModelSerializer):
         )
 
 
-class SerializadorCreacionUbicacion(serializers.Serializer):
-    empresa_id = serializers.UUIDField(write_only=True)
+class SerializadorDatosUbicacion(serializers.Serializer):
     nombre = serializers.CharField(max_length=200)
     tipo_ubicacion_id = serializers.UUIDField(write_only=True)
-    origen = serializers.ChoiceField(choices=OrigenUbicacion.choices)
-    identificador_lugar_google = serializers.CharField(
-        max_length=255,
-        required=False,
-        allow_blank=True,
-        allow_null=True,
-    )
     pais_id = serializers.UUIDField(write_only=True)
     departamento = serializers.CharField(
         source="nivel_administrativo_1",
@@ -155,6 +147,17 @@ class SerializadorCreacionUbicacion(serializers.Serializer):
         allow_blank=True,
         allow_null=True,
     )
+
+
+class SerializadorCreacionUbicacion(SerializadorDatosUbicacion):
+    empresa_id = serializers.UUIDField(write_only=True)
+    origen = serializers.ChoiceField(choices=OrigenUbicacion.choices)
+    identificador_lugar_google = serializers.CharField(
+        max_length=255,
+        required=False,
+        allow_blank=True,
+        allow_null=True,
+    )
     permite_origen = serializers.BooleanField()
     permite_destino = serializers.BooleanField()
 
@@ -184,6 +187,25 @@ class SerializadorCreacionUbicacion(serializers.Serializer):
             raise serializers.ValidationError(
                 "La ubicación debe permitir origen, destino o ambos."
             )
+        return atributos
+
+
+class SerializadorActualizacionUbicacion(SerializadorDatosUbicacion):
+    empresa_id = serializers.UUIDField(write_only=True)
+
+    def get_fields(self):
+        campos = super().get_fields()
+        for nombre, campo in campos.items():
+            if nombre != "empresa_id":
+                campo.required = False
+        return campos
+
+    def validate(self, atributos):
+        desconocidos = set(self.initial_data) - set(self.fields)
+        if desconocidos:
+            raise serializers.ValidationError({campo: "Campo no editable en esta operación." for campo in sorted(desconocidos)})
+        if not (atributos.keys() - {"empresa_id"}):
+            raise serializers.ValidationError({"detail": "Debe enviar al menos un dato de la ubicación para actualizar."})
         return atributos
 
 

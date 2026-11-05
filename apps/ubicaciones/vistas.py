@@ -13,6 +13,7 @@ from apps.ubicaciones.selectores import (
 )
 from apps.ubicaciones.serializadores import (
     SerializadorActualizacionAutorizacion,
+    SerializadorActualizacionUbicacion,
     SerializadorCreacionUbicacion,
     SerializadorFiltroUbicaciones,
     SerializadorRelacionUbicacionEmpresa,
@@ -21,6 +22,7 @@ from apps.ubicaciones.serializadores import (
 )
 from apps.ubicaciones.servicios import (
     actualizar_autorizacion_ubicacion,
+    actualizar_ubicacion,
     registrar_ubicacion,
 )
 
@@ -68,6 +70,12 @@ class VistaDetalleUbicacion(APIView):
             SerializadorUbicacionAdministrada(ubicacion).data,
             status=HTTP_200_OK,
         )
+
+    def patch(self, request, ubicacion_id):
+        entrada = SerializadorActualizacionUbicacion(data=request.data)
+        entrada.is_valid(raise_exception=True)
+        relacion = actualizar_ubicacion(request.user, ubicacion_id, entrada.validated_data)
+        return Response(SerializadorRelacionUbicacionEmpresa(relacion).data, status=HTTP_200_OK)
 
 
 class VistaAutorizacionUbicacionEmpresa(APIView):
